@@ -15,6 +15,12 @@ pub(super) fn golf_features_enabled(state: &State) -> bool {
 pub(super) fn is_submenu_row_disabled(state: &State, kind: SubmenuKind, id: SubRowId) -> bool {
     match (kind, id) {
         (SubmenuKind::Bookkeeping, _) => true,
+        (
+            SubmenuKind::ArrowCloud,
+            SubRowId::RequestlineEnabled
+            | SubRowId::RequestlineProfile
+            | SubRowId::RequestlineStatus,
+        ) => !arrowcloud_enabled(state),
         (SubmenuKind::SelectMusic, SubRowId::WheelScoreType) => {
             get_choice_by_id(
                 &state.sub[SubmenuKind::SelectMusic].choice_indices,

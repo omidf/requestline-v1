@@ -91,6 +91,13 @@ fn collect_row_choices<T: ChoiceText>(
             T::borrowed(state.twitch.channel.as_str())
         }];
     }
+    if kind == SubmenuKind::ArrowCloud
+        && rows
+            .get(row_idx)
+            .is_some_and(|row| row.id == SubRowId::RequestlineStatus)
+    {
+        return vec![T::shared(requestline_status_text(state))];
+    }
     if let Some(row) = rows.get(row_idx)
         && kind == SubmenuKind::SelectMusic
         && row.id == SubRowId::GsBoxLeaderboards

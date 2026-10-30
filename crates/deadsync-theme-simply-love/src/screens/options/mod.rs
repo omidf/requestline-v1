@@ -90,6 +90,8 @@ mod item;
 use item::*;
 mod state;
 use state::*;
+mod requestline;
+use requestline::*;
 mod streaming;
 use streaming::*;
 mod visibility;
@@ -123,6 +125,7 @@ use render::*;
 
 // Public API re-exports
 pub use download_packs::sync_stepmaniaonline;
+pub use requestline::sync_requestline_status;
 pub use input::handle_input;
 pub use layout::clear_submenu_row_layout_cache;
 pub use render::{

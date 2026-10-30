@@ -124,6 +124,30 @@ pub(in crate::screens::options) const ARROWCLOUD_OPTIONS_ROWS: &[SubRow] = &[
         ],
         inline: true,
     },
+    SubRow {
+        id: SubRowId::RequestlineEnabled,
+        label: lookup_key("OptionsRequestline", "Enable"),
+        choices: &[
+            localized_choice("Common", "No"),
+            localized_choice("Common", "Yes"),
+        ],
+        inline: true,
+    },
+    SubRow {
+        id: SubRowId::RequestlineProfile,
+        label: lookup_key("OptionsRequestline", "Profile"),
+        choices: &[
+            localized_choice("OptionsRequestline", "Player1"),
+            localized_choice("OptionsRequestline", "Player2"),
+        ],
+        inline: true,
+    },
+    SubRow {
+        id: SubRowId::RequestlineStatus,
+        label: lookup_key("OptionsRequestline", "Status"),
+        choices: &[],
+        inline: false,
+    },
 ];
 
 pub(in crate::screens::options) const ONLINE_SCORING_OPTIONS_ROWS: &[SubRow] = &[
@@ -270,6 +294,30 @@ pub(in crate::screens::options) const ARROWCLOUD_OPTIONS_ITEMS: &[Item] = &[
         help: &[HelpEntry::Paragraph(lookup_key(
             "OptionsGrooveStatsHelp",
             "ArrowCloudQRLoginHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestline,
+        name: lookup_key("OptionsRequestline", "Enable"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "EnableHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineProfile,
+        name: lookup_key("OptionsRequestline", "Profile"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "ProfileHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineStatus,
+        name: lookup_key("OptionsRequestline", "Status"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "StatusHelp",
         ))],
     },
     Item {

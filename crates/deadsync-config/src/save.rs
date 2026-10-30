@@ -309,6 +309,7 @@ pub fn build_saved_app_config_file(
         deadsync_input::write_keymap_ini_section,
     );
     crate::streaming::push_options(&mut content, cfg.twitch);
+    crate::requestline::push_options(&mut content, cfg.requestline);
     content
 }
 
@@ -367,6 +368,7 @@ pub fn build_default_app_config_file() -> String {
         |content, ()| deadsync_input::write_default_keymap_ini_section(content),
     );
     crate::streaming::push_options(&mut content, default.twitch);
+    crate::requestline::push_options(&mut content, default.requestline);
     content
 }
 

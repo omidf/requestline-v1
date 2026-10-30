@@ -204,6 +204,7 @@ pub fn load_app_config(conf: &SimpleIni, default: Config) -> Config {
 
     let mut cfg = default;
     cfg.twitch = crate::streaming::load(conf, default.twitch);
+    cfg.requestline = crate::requestline::load(conf, default.requestline);
     apply_display_opts(loaded.display, &mut cfg);
     apply_system_opts(loaded.system, &mut cfg);
     apply_system_hardware_opts(loaded.input_hardware, &mut cfg);

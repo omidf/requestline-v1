@@ -838,6 +838,7 @@ pub enum SimplyLoveLightsConfigRequest {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SimplyLoveOnlineConfigRequest {
     TwitchChat(deadsync_config::streaming::TwitchOptions),
+    Requestline(deadsync_config::requestline::RequestlineOptions),
     EnableGrooveStats(bool),
     ShowSrpgShop(bool),
     SrpgShopFolder(SimplyLoveSrpgShopFolder),

@@ -180,6 +180,8 @@ pub(super) enum SubmenuTransition {
 
 pub struct State {
     pub(super) twitch: config::streaming::TwitchOptions,
+    pub(super) requestline: config::requestline::RequestlineOptions,
+    pub(super) requestline_status: deadsync_online::requestline::Status,
     pub(super) twitch_channel_entry: Option<String>,
     pub(super) twitch_channel_invalid: bool,
     pub(super) main_visible_items: Vec<&'static Item>,
@@ -422,6 +424,8 @@ pub fn init(view: OptionsInitView) -> State {
     let main_visible_items = build_visible_items(updater_capabilities);
     let mut state = State {
         twitch: cfg.twitch,
+        requestline: cfg.requestline,
+        requestline_status: deadsync_online::requestline::Status::default(),
         twitch_channel_entry: None,
         twitch_channel_invalid: false,
         main_visible_items,
@@ -1656,6 +1660,18 @@ pub fn init(view: OptionsInitView) -> State {
         ARROWCLOUD_OPTIONS_ROWS,
         SubRowId::ArrowCloudQrLogin,
         arrowcloud_qr_login_when_choice_index(cfg.arrowcloud_qr_login_when),
+    );
+    set_choice_by_id(
+        &mut state.sub[SubmenuKind::ArrowCloud].choice_indices,
+        ARROWCLOUD_OPTIONS_ROWS,
+        SubRowId::RequestlineEnabled,
+        yes_no_choice_index(cfg.requestline.enabled),
+    );
+    set_choice_by_id(
+        &mut state.sub[SubmenuKind::ArrowCloud].choice_indices,
+        ARROWCLOUD_OPTIONS_ROWS,
+        SubRowId::RequestlineProfile,
+        requestline_side_choice_index(cfg.requestline.side),
     );
     set_choice_by_id(
         &mut state.sub[SubmenuKind::GrooveStats].choice_indices,

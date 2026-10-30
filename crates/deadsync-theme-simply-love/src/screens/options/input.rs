@@ -1162,6 +1162,18 @@ pub(super) fn apply_submenu_choice_delta(
             queue_online_reinitialize(state);
         }
         action = Some(effect);
+    } else if matches!(kind, SubmenuKind::ArrowCloud)
+        && matches!(
+            rows[row_index].id,
+            SubRowId::RequestlineEnabled | SubRowId::RequestlineProfile
+        )
+    {
+        if rows[row_index].id == SubRowId::RequestlineEnabled {
+            state.requestline.enabled = yes_no_from_choice(new_index);
+        } else {
+            state.requestline.side = requestline_side_from_choice(new_index);
+        }
+        action = Some(requestline_effect(state));
     } else if matches!(kind, SubmenuKind::ArrowCloud) {
         let row = &rows[row_index];
         let enabled = yes_no_from_choice(new_index);

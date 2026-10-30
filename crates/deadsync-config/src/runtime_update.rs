@@ -79,6 +79,10 @@ pub fn update_twitch_chat(options: crate::streaming::TwitchOptions) {
     update_config(|cfg| crate::update::set_if_changed(&mut cfg.twitch, options));
 }
 
+pub fn update_requestline(options: crate::requestline::RequestlineOptions) {
+    update_config(|cfg| crate::update::set_if_changed(&mut cfg.requestline, options));
+}
+
 update_config_fn!(pub fn update_menu_music(enabled: bool) => set_menu_music);
 update_config_fn!(pub fn update_software_renderer_threads(threads: u8) => set_software_renderer_threads);
 update_config_fn!(pub fn update_audio_sample_rate(rate: Option<u32>) => set_audio_sample_rate);

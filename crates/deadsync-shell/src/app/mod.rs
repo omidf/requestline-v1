@@ -2314,6 +2314,16 @@ impl App {
         }
     }
 
+    fn sync_options_requestline(&mut self) {
+        if self.state.screens.current_screen != CurrentScreen::Options {
+            return;
+        }
+        options::sync_requestline_status(
+            &mut self.state.screens.options_state,
+            deadsync_online::requestline::status(),
+        );
+    }
+
     fn sync_options_stepmaniaonline(&mut self) {
         if self.state.screens.current_screen != CurrentScreen::Options {
             return;
@@ -3034,6 +3044,12 @@ impl App {
             debug!(
                 "Gameplay transition timing: song='{}' restart={} payload_source={} payload_ms={:.3} init_ms={init_ms:.3} sfx_prewarm_ms={sfx_prewarm_ms:.3} asset_prewarm_ms={asset_prewarm_ms:.3} text_prewarm_ms={text_prewarm_ms:.3} elapsed_ms={total_ms:.3}",
                 song.title, finish.restart, payload_source, finish.payload_ms,
+            );
+        }
+        if !finish.restart && !finish.lua_reload {
+            deadsync_online::requestline::on_song_started(
+                &song.simfile_path,
+                &gs.charts()[0].short_hash,
             );
         }
         let commands = vec![
@@ -4476,6 +4492,7 @@ impl App {
         if work_caps & frame_work::OPTIONS_VIEW != 0 {
             self.sync_options_song_packs();
             self.sync_options_stepmaniaonline();
+            self.sync_options_requestline();
         }
         if work_caps & frame_work::CONTENT_BROWSER_VIEW != 0 {
             self.sync_content_browser_stepmaniaonline();
@@ -10485,6 +10502,7 @@ impl App {
         if target == CurrentScreen::SelectMusic {
             self.state.session.clear_course_runtime();
             self.begin_play_session();
+            deadsync_online::requestline::sync_library_if_needed();
             let profile_session = profile::get_session_snapshot();
             if matches!(
                 profile_session.play_mode,
