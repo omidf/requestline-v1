@@ -11125,6 +11125,8 @@ impl ApplicationHandler<UserEvent> for App {
             warn!("Failed to restore desktop on exit: {error}");
         }
         config::runtime::flush_pending_saves();
+        // Close the requestline socket cleanly so the page sees the game leave now.
+        deadsync_online::requestline::shutdown();
         if let Some(backend) = &mut self.backend {
             self.dynamic_media
                 .destroy_assets(&mut self.asset_manager, backend);
