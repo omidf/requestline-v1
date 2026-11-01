@@ -657,7 +657,8 @@ impl<E: Env> Live<'_, E> {
             debug!("requestline: upload link nobody asked for, ignored");
             return;
         }
-        let SyncState::WaitingLink { gz, hash, .. } = std::mem::replace(&mut self.sync, SyncState::Idle)
+        let SyncState::WaitingLink { gz, hash, .. } =
+            std::mem::replace(&mut self.sync, SyncState::Idle)
         else {
             return;
         };
