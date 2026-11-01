@@ -376,6 +376,15 @@ impl App {
         if prev == CurrentScreen::SelectMusic && target != CurrentScreen::Gameplay {
             self.gameplay_preload = None;
         }
+        // Leaving gameplay for anything but gameplay (results, a fail, a quit
+        // to song select) ends the song for requestline. Gameplay to gameplay
+        // is a restart or reload, which doesn't.
+        if prev == CurrentScreen::Gameplay
+            && target != CurrentScreen::Gameplay
+            && let Some(gameplay) = self.state.screens.gameplay_state.as_ref()
+        {
+            deadsync_online::requestline::on_song_ended(&gameplay.song().simfile_path);
+        }
         self.commit_screen_change(target);
         if target != CurrentScreen::Gameplay {
             self.state.gameplay_offset_save_prompt = None;

@@ -23,6 +23,11 @@ pub(super) enum Outgoing {
         song_id: String,
         chart_hash: String,
     },
+    /// The song finished, failed or was quit (not restarted). No reply.
+    #[serde(rename_all = "camelCase")]
+    Ended {
+        song_id: String,
+    },
 }
 
 impl Outgoing {
@@ -84,6 +89,9 @@ pub(super) enum Incoming {
         message: Option<String>,
         #[serde(default)]
         reason: Option<String>,
+        /// Which message a `refused` error is about.
+        #[serde(default, rename = "for")]
+        for_type: Option<String>,
         #[serde(default)]
         upload_id: Option<String>,
     },
@@ -133,6 +141,12 @@ mod tests {
                     chart_hash: "5d8c5de5bce738f4".into(),
                 },
                 r#"{"type":"started","songId":"altruism2/Bounce Back","chartHash":"5d8c5de5bce738f4"}"#,
+            ),
+            (
+                Outgoing::Ended {
+                    song_id: "altruism2/Bounce Back".into(),
+                },
+                r#"{"type":"ended","songId":"altruism2/Bounce Back"}"#,
             ),
         ];
         for (message, json) in cases {
@@ -220,6 +234,7 @@ mod tests {
                 code: "library-rejected".into(),
                 message: Some("bad gzip".into()),
                 reason: None,
+                for_type: None,
                 upload_id: Some("u1".into()),
             })
         );
@@ -232,6 +247,10 @@ mod tests {
         assert!(matches!(
             Incoming::parse(r#"{"type":"error","code":"refused","reason":"invalid","for":"started"}"#),
             Some(Incoming::Error { reason: Some(r), .. }) if r == "invalid"
+        ));
+        assert!(matches!(
+            Incoming::parse(r#"{"type":"error","code":"refused","reason":"invalid","for":"ended"}"#),
+            Some(Incoming::Error { for_type: Some(f), .. }) if f == "ended"
         ));
     }
 

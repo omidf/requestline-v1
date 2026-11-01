@@ -24,6 +24,10 @@ pub(super) enum Command {
         chart_hash: String,
         at: Instant,
     },
+    Ended {
+        song_id: String,
+        at: Instant,
+    },
     Shutdown,
 }
 
@@ -165,9 +169,15 @@ struct PendingStart {
     at: Instant,
 }
 
+struct PendingEnd {
+    song_id: String,
+    at: Instant,
+}
+
 /// State kept across reconnects for the life of the thread.
 struct Session {
     pending_start: Option<PendingStart>,
+    pending_end: Option<PendingEnd>,
     /// Hash the server confirmed this run, so a repeat check is free.
     synced_hash: Option<String>,
     /// A hash the server refused: try again next launch, not every visit.
@@ -188,6 +198,7 @@ enum SessionEnd {
 fn run<E: Env>(mut env: E, rx: &Receiver<Command>, shared: &Shared, timing: &Timing) {
     let mut session = Session {
         pending_start: None,
+        pending_end: None,
         synced_hash: None,
         rejected_hash: None,
     };
@@ -267,20 +278,25 @@ fn wait(rx: &Receiver<Command>, delay: Duration, session: &mut Session) -> bool 
     }
 }
 
-/// While offline only the latest song start is worth keeping; a library
-/// check happens anyway after the next `hello`.
+/// While offline only the latest song start and end are worth keeping; a
+/// library check happens anyway after the next `hello`.
 fn keep_offline(command: Command, session: &mut Session) {
-    if let Command::Started {
-        song_id,
-        chart_hash,
-        at,
-    } = command
-    {
-        session.pending_start = Some(PendingStart {
+    match command {
+        Command::Started {
             song_id,
             chart_hash,
             at,
-        });
+        } => {
+            session.pending_start = Some(PendingStart {
+                song_id,
+                chart_hash,
+                at,
+            });
+        }
+        Command::Ended { song_id, at } => {
+            session.pending_end = Some(PendingEnd { song_id, at });
+        }
+        Command::SyncLibrary | Command::Shutdown => {}
     }
 }
 
@@ -500,7 +516,9 @@ impl<E: Env> Live<'_, E> {
                     requests_open: false,
                 });
                 info!("requestline: connected to /{}", self.page);
-                if self.deliver_pending_start().is_err() {
+                // The start first, then the end, so a song that ended while
+                // offline still shows as last played.
+                if self.deliver_pending_start().is_err() || self.deliver_pending_end().is_err() {
                     return Some(SessionEnd::Retry {
                         up_for: Duration::ZERO,
                         clean: false,
@@ -555,6 +573,7 @@ impl<E: Env> Live<'_, E> {
                 code,
                 message,
                 reason,
+                for_type,
                 upload_id,
             } => {
                 let message = message.unwrap_or_default();
@@ -565,8 +584,9 @@ impl<E: Env> Live<'_, E> {
                     }
                     "library-rejected" => self.on_library_rejected(upload_id.as_deref(), &message),
                     _ => warn!(
-                        "requestline: server error {code} ({}): {message}",
-                        reason.as_deref().unwrap_or("-")
+                        "requestline: server error {code} ({}) for {}: {message}",
+                        reason.as_deref().unwrap_or("-"),
+                        for_type.as_deref().unwrap_or("-")
                     ),
                 }
             }
@@ -595,6 +615,12 @@ impl<E: Env> Live<'_, E> {
                     self.deliver_pending_start()?;
                 }
             }
+            Command::Ended { song_id, at } => {
+                self.session.pending_end = Some(PendingEnd { song_id, at });
+                if self.said_hello {
+                    self.deliver_pending_end()?;
+                }
+            }
             Command::Shutdown => {}
         }
         Ok(())
@@ -614,6 +640,19 @@ impl<E: Env> Live<'_, E> {
         self.send(&Outgoing::Started {
             song_id: start.song_id,
             chart_hash: start.chart_hash,
+        })
+    }
+
+    fn deliver_pending_end(&mut self) -> Result<(), ()> {
+        let Some(end) = self.session.pending_end.take() else {
+            return Ok(());
+        };
+        if end.at.elapsed() > self.timing.start_max_age {
+            debug!("requestline: dropped an old song end for {}", end.song_id);
+            return Ok(());
+        }
+        self.send(&Outgoing::Ended {
+            song_id: end.song_id,
         })
     }
 
@@ -987,6 +1026,71 @@ mod tests {
         recv_json(&mut again);
         send(&mut again, HELLO_NULL);
         assert_eq!(recv_json(&mut again)["songId"], "P/Offline");
+
+        handle.stop();
+        handle.join.join().unwrap();
+    }
+
+    #[test]
+    fn ended_is_sent_and_kept_in_order_while_offline() {
+        let (server, url) = Server::new();
+        let (handle, status, _puts) = start(url, None);
+        let ended = |song: &str, age: Duration| Command::Ended {
+            song_id: song.into(),
+            at: Instant::now() - age,
+        };
+
+        let mut socket = server.accept();
+        recv_json(&mut socket);
+        send(&mut socket, HELLO_NULL);
+        thread::sleep(Duration::from_millis(50));
+        handle.tx.send(ended("P/Live", Duration::ZERO)).unwrap();
+        assert_eq!(
+            recv_json(&mut socket),
+            serde_json::json!({"type":"ended","songId":"P/Live"})
+        );
+
+        // Offline: a start, then its end. After hello: started, then ended.
+        drop(socket);
+        wait_for(&status, &Status::Unreachable);
+        handle
+            .tx
+            .send(Command::Started {
+                song_id: "P/Offline".into(),
+                chart_hash: "eeeeeeeeeeeeeeee".into(),
+                at: Instant::now(),
+            })
+            .unwrap();
+        handle.tx.send(ended("P/Offline", Duration::ZERO)).unwrap();
+        let mut again = server.accept();
+        recv_json(&mut again);
+        send(&mut again, HELLO_NULL);
+        assert_eq!(recv_json(&mut again)["type"], "started");
+        assert_eq!(
+            recv_json(&mut again),
+            serde_json::json!({"type":"ended","songId":"P/Offline"})
+        );
+
+        // An end older than 2 minutes is dropped.
+        drop(again);
+        wait_for(&status, &Status::Unreachable);
+        handle
+            .tx
+            .send(ended("P/Stale", Duration::from_secs(180)))
+            .unwrap();
+        let mut third = server.accept();
+        recv_json(&mut third);
+        send(&mut third, HELLO_NULL);
+        thread::sleep(Duration::from_millis(50));
+        handle
+            .tx
+            .send(Command::Started {
+                song_id: "P/Marker".into(),
+                chart_hash: "ffffffffffffffff".into(),
+                at: Instant::now(),
+            })
+            .unwrap();
+        assert_eq!(recv_json(&mut third)["songId"], "P/Marker");
 
         handle.stop();
         handle.join.join().unwrap();

@@ -10,7 +10,9 @@
 //!    the game leaves and open them again when it comes back.
 //! 3. After `hello`, the library is uploaded (gzipped format 1, through a
 //!    presigned S3 PUT) only when its hash differs from the server's.
-//! 4. Each song start is reported so its first request leaves the queue.
+//! 4. Each song start is reported so its first request leaves the queue, and
+//!    each end (pass, fail or quit, not a restart) so the page shows it as
+//!    last played rather than playing now.
 //!
 //! Everything runs on the `requestline` thread; the game loop only sends it
 //! commands. Set `DEADSYNC_REQUESTLINE_URL` (for example
@@ -319,6 +321,26 @@ pub fn on_song_started(simfile_path: &Path, chart_hash: &str) {
         let _ = tx.send(Command::Started {
             song_id,
             chart_hash: chart_hash.trim().to_ascii_lowercase(),
+            at: Instant::now(),
+        });
+    }
+}
+
+/// Gameplay ended without a restart (passed, failed or quit): the page shows
+/// the song as last played instead of playing now. Fire and forget.
+pub fn on_song_ended(simfile_path: &Path) {
+    let Some(song_id) = song_id(simfile_path) else {
+        return;
+    };
+    // Only worth telling a connection that's already up; an `ended` alone
+    // never needs to start one.
+    let tx = CONNECTION
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().filter(|h| h.is_running()).map(|h| h.tx.clone()));
+    if let Some(tx) = tx {
+        let _ = tx.send(Command::Ended {
+            song_id,
             at: Instant::now(),
         });
     }
