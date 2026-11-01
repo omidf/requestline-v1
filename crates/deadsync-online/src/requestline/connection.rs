@@ -885,10 +885,9 @@ mod tests {
         );
     }
 
-    fn start(
-        url: String,
-        library: Option<(Vec<u8>, String)>,
-    ) -> (Handle, Arc<Mutex<Status>>, Receiver<(String, Vec<u8>)>) {
+    type Started = (Handle, Arc<Mutex<Status>>, Receiver<(String, Vec<u8>)>);
+
+    fn start(url: String, library: Option<(Vec<u8>, String)>) -> Started {
         let (puts, put_rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(Status::Off));
         let handle = spawn(TestEnv { url, library, puts }, status.clone(), fast()).unwrap();
