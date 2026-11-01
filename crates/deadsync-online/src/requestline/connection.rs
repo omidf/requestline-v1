@@ -284,7 +284,7 @@ fn keep_offline(command: Command, session: &mut Session) {
     }
 }
 
-enum Sync {
+enum SyncState {
     Idle,
     WaitingLink {
         gz: Vec<u8>,
@@ -312,7 +312,7 @@ struct Live<'a, E: Env> {
     page: String,
     said_hello: bool,
     server_hash: Option<String>,
-    sync: Sync,
+    sync: SyncState,
 }
 
 fn connect(url: &str, read_wait: Duration) -> Result<Socket, SessionEnd> {
@@ -376,7 +376,7 @@ fn run_socket<E: Env>(
         page: target.page_name.clone().unwrap_or_default(),
         said_hello: false,
         server_hash: None,
-        sync: Sync::Idle,
+        sync: SyncState::Idle,
     };
     let retry = |clean| SessionEnd::Retry {
         up_for: connected_at.elapsed(),
@@ -619,7 +619,7 @@ impl<E: Env> Live<'_, E> {
 
     /// Starts a library sync when the local library differs from the server's.
     fn start_sync(&mut self) -> Result<(), ()> {
-        if !matches!(self.sync, Sync::Idle) {
+        if !matches!(self.sync, SyncState::Idle) {
             return Ok(());
         }
         let Some(library) = self.env.library() else {
@@ -644,7 +644,7 @@ impl<E: Env> Live<'_, E> {
             }
         };
         self.send(&Outgoing::LibraryUpload)?;
-        self.sync = Sync::WaitingLink {
+        self.sync = SyncState::WaitingLink {
             gz,
             hash: library.hash,
             since: Instant::now(),
@@ -653,11 +653,11 @@ impl<E: Env> Live<'_, E> {
     }
 
     fn on_upload_link(&mut self, upload_id: String, url: &str, max_bytes: Option<u64>) {
-        if !matches!(self.sync, Sync::WaitingLink { .. }) {
+        if !matches!(self.sync, SyncState::WaitingLink { .. }) {
             debug!("requestline: upload link nobody asked for, ignored");
             return;
         }
-        let Sync::WaitingLink { gz, hash, .. } = std::mem::replace(&mut self.sync, Sync::Idle)
+        let SyncState::WaitingLink { gz, hash, .. } = std::mem::replace(&mut self.sync, SyncState::Idle)
         else {
             return;
         };
@@ -681,7 +681,7 @@ impl<E: Env> Live<'_, E> {
             });
         match spawned {
             Ok(_) => {
-                self.sync = Sync::Uploading {
+                self.sync = SyncState::Uploading {
                     upload_id,
                     hash,
                     done,
@@ -693,22 +693,22 @@ impl<E: Env> Live<'_, E> {
 
     fn step_sync(&mut self) -> Result<(), ()> {
         match &self.sync {
-            Sync::Idle => {}
-            Sync::WaitingLink { since, .. } => {
+            SyncState::Idle => {}
+            SyncState::WaitingLink { since, .. } => {
                 if since.elapsed() > self.timing.link_timeout {
                     warn!("requestline: no upload link from the server; trying later");
-                    self.sync = Sync::Idle;
+                    self.sync = SyncState::Idle;
                 }
             }
-            Sync::Uploading { done, .. } => {
+            SyncState::Uploading { done, .. } => {
                 let result = match done.try_recv() {
                     Ok(result) => result,
                     Err(TryRecvError::Empty) => return Ok(()),
                     Err(TryRecvError::Disconnected) => Err("upload worker ended".to_owned()),
                 };
-                let Sync::Uploading {
+                let SyncState::Uploading {
                     upload_id, hash, ..
-                } = std::mem::replace(&mut self.sync, Sync::Idle)
+                } = std::mem::replace(&mut self.sync, SyncState::Idle)
                 else {
                     return Ok(());
                 };
@@ -718,7 +718,7 @@ impl<E: Env> Live<'_, E> {
                             upload_id: upload_id.clone(),
                             hash: hash.clone(),
                         })?;
-                        self.sync = Sync::WaitingUpdate {
+                        self.sync = SyncState::WaitingUpdate {
                             upload_id,
                             hash,
                             since: Instant::now(),
@@ -731,10 +731,10 @@ impl<E: Env> Live<'_, E> {
                     Err(error) => warn!("requestline: library upload failed: {error}"),
                 }
             }
-            Sync::WaitingUpdate { since, .. } => {
+            SyncState::WaitingUpdate { since, .. } => {
                 if since.elapsed() > self.timing.update_timeout {
                     warn!("requestline: the server didn't confirm the library; trying later");
-                    self.sync = Sync::Idle;
+                    self.sync = SyncState::Idle;
                 }
             }
         }
@@ -748,7 +748,7 @@ impl<E: Env> Live<'_, E> {
         pack_count: u64,
         skipped: u64,
     ) {
-        let Sync::WaitingUpdate {
+        let SyncState::WaitingUpdate {
             upload_id, hash, ..
         } = &self.sync
         else {
@@ -763,17 +763,17 @@ impl<E: Env> Live<'_, E> {
         info!("requestline: synced {song_count} songs in {pack_count} packs ({skipped} skipped)");
         self.session.synced_hash = Some(hash.clone());
         self.server_hash = Some(hash.clone());
-        self.sync = Sync::Idle;
+        self.sync = SyncState::Idle;
     }
 
     fn on_library_rejected(&mut self, upload_id: Option<&str>, message: &str) {
         let hash = match &self.sync {
-            Sync::WaitingUpdate {
+            SyncState::WaitingUpdate {
                 upload_id: ours,
                 hash,
                 ..
             }
-            | Sync::Uploading {
+            | SyncState::Uploading {
                 upload_id: ours,
                 hash,
                 ..
@@ -785,7 +785,7 @@ impl<E: Env> Live<'_, E> {
         };
         warn!("requestline: library rejected: {message}");
         self.session.rejected_hash = Some(hash);
-        self.sync = Sync::Idle;
+        self.sync = SyncState::Idle;
     }
 }
 
