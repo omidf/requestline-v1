@@ -72,7 +72,7 @@ named_choice! {
         Coin = "Coin",
         Chime = "Chime",
         DingDong = "DingDong",
-        NeedleDrop = "NeedleDrop",
+        Pop = "Pop",
         Selector = "Selector",
     }
 }
@@ -85,7 +85,7 @@ impl RequestlineSound {
             Self::Coin => Some("assets/sounds/requestline/coin.ogg"),
             Self::Chime => Some("assets/sounds/requestline/chime.ogg"),
             Self::DingDong => Some("assets/sounds/requestline/dingdong.ogg"),
-            Self::NeedleDrop => Some("assets/sounds/requestline/needle.ogg"),
+            Self::Pop => Some("assets/sounds/requestline/pop.ogg"),
             Self::Selector => Some("assets/sounds/requestline/selector.ogg"),
         }
     }
@@ -108,7 +108,7 @@ named_choice! {
         Ticket = "Ticket",
         Disc = "Disc",
         Bell = "Bell",
-        Slots = "Slots",
+        Radio = "Radio",
     }
 }
 
@@ -122,7 +122,7 @@ impl RequestlineVisual {
             Self::Ticket => Some("\u{1F39F}"),
             Self::Disc => Some("\u{1F4BF}"),
             Self::Bell => Some("\u{1F514}"),
-            Self::Slots => Some("\u{1F3B0}"),
+            Self::Radio => Some("\u{1F4FB}"),
         }
     }
 }
@@ -208,7 +208,7 @@ mod tests {
         let options = RequestlineOptions {
             enabled: true,
             side: RequestlineSide::P2,
-            sound: RequestlineSound::NeedleDrop,
+            sound: RequestlineSound::Pop,
             sound_timing: RequestlineSoundTiming::Now,
             visual: RequestlineVisual::Bell,
             corner: RequestlineToastCorner::TopLeft,
@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(RequestlineSide::parse("P3"), None);
         assert_eq!(RequestlineSound::parse(" chime "), Some(RequestlineSound::Chime));
         assert_eq!(RequestlineSound::from_index(99), RequestlineSound::Off);
-        assert_eq!(RequestlineVisual::Slots.index(), 5);
+        assert_eq!(RequestlineVisual::Radio.index(), 5);
         assert!(RequestlineSound::ALL[1..].iter().all(|s| s.asset_path().is_some()));
         assert!(RequestlineVisual::ALL[1..].iter().all(|v| v.emoji().is_some()));
     }

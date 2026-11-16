@@ -655,7 +655,7 @@ pub const SFX_PATHS: &[&str] = &[
     "assets/sounds/requestline/coin.ogg",
     "assets/sounds/requestline/chime.ogg",
     "assets/sounds/requestline/dingdong.ogg",
-    "assets/sounds/requestline/needle.ogg",
+    "assets/sounds/requestline/pop.ogg",
     "assets/sounds/requestline/selector.ogg",
     "assets/sounds/boom.ogg",
     "assets/sounds/change.ogg",

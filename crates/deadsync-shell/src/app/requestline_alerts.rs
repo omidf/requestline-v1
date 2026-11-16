@@ -1,10 +1,11 @@
 //! Requestline new-request alerts: a sound and a corner popup, both opt-in
 //! (ArrowCloud Options > New Request Sound / New Request Popup).
 //!
-//! Requests arriving within `GROUP` of each other make one alert: one sound,
-//! one popup that shows the latest and counts the rest. During gameplay the
-//! popup still shows at once, but with "Hold Until Song Ends" the sound waits
-//! until gameplay is over, so a chime never costs anyone a run.
+//! One popup at a time: a request while it shows updates it in place (the
+//! latest title, "+N more") and restarts its timer. Requests within `GROUP` of
+//! each other make one sound. During gameplay the popup still shows at once,
+//! but with "Hold Until Song Ends" the sound waits until gameplay is over, so
+//! a chime never costs anyone a run.
 
 use super::{App, CurrentScreen};
 use deadlib_present::actors::Actor;
@@ -15,16 +16,43 @@ use deadsync_config::requestline::{
 use deadsync_online::requestline::QueueEntry;
 use std::time::{Duration, Instant};
 
-/// Arrivals this close together are one alert.
+/// Arrivals this close together make one sound.
 const GROUP: Duration = Duration::from_secs(2);
-const FADE_IN: Duration = Duration::from_millis(250);
+const FADE_IN: Duration = Duration::from_millis(200);
 /// How long the popup stays after the last request it shows arrived.
-const HOLD: Duration = Duration::from_secs(5);
-const FADE_OUT: Duration = Duration::from_millis(500);
+const HOLD: Duration = Duration::from_secs(4);
+const FADE_OUT: Duration = Duration::from_millis(300);
+
+/// A requested song's titles, from the local library when it has the song
+/// (for the translit setting), else the title the site sent.
+#[derive(Debug)]
+struct Titles {
+    native: String,
+    translit: String,
+}
+
+impl Titles {
+    fn of(entry: &QueueEntry) -> Self {
+        let local = deadsync_simfile::runtime_cache::get_song_cache()
+            .iter()
+            .flat_map(|pack| pack.songs.iter())
+            .find(|song| {
+                deadsync_online::requestline::song_id(&song.simfile_path).as_deref()
+                    == Some(entry.song_id.as_str())
+            })
+            .map(|song| (song.display_title(false).to_owned(), song.display_title(true).to_owned()));
+        let (native, translit) = local.unwrap_or_else(|| (entry.title.clone(), entry.title.clone()));
+        Self { native, translit }
+    }
+
+    fn shown(&self, translit: bool) -> &str {
+        if translit { &self.translit } else { &self.native }
+    }
+}
 
 #[derive(Debug)]
 struct Toast {
-    title: String,
+    title: Titles,
     requester: String,
     more: usize,
     shown_at: Instant,
@@ -57,17 +85,17 @@ impl RequestAlerts {
         self.last_arrival = Some(now);
 
         if options.visual != RequestlineVisual::Off {
-            match self.toast.as_mut().filter(|_| grouped) {
+            match self.toast.as_mut() {
+                // Still on screen: update it in place and restart its timer.
                 Some(toast) => {
                     toast.more += fresh.len();
-                    toast.title.clone_from(&latest.title);
+                    toast.title = Titles::of(latest);
                     toast.requester.clone_from(&latest.name);
                     toast.last_arrival = now;
                 }
                 None => {
-                    // A popup still fading from an earlier alert is replaced.
                     self.toast = Some(Toast {
-                        title: latest.title.clone(),
+                        title: Titles::of(latest),
                         requester: latest.name.clone(),
                         more: fresh.len() - 1,
                         shown_at: now,
@@ -153,16 +181,19 @@ impl App {
         let Some(toast) = alerts.toast.as_ref() else {
             return;
         };
+        let translit = deadsync_config::runtime::get().translated_titles;
         deadsync_theme_simply_love::screens::components::shared::request_toast::push(
             actors,
             &deadsync_theme_simply_love::screens::components::shared::request_toast::RequestToast {
                 emoji,
-                title: &toast.title,
+                title: toast.title.shown(translit),
                 requester: &toast.requester,
                 more: toast.more,
                 corner: corner(&options),
                 visibility,
+                slide: !in_song,
             },
+            &self.asset_manager,
         );
     }
 }
@@ -207,11 +238,19 @@ mod tests {
         assert!(alerts.arrive(&[entry("a")], &on(), false, t0));
         assert!(!alerts.arrive(&[entry("b"), entry("c")], &on(), false, t0 + Duration::from_secs(1)));
         let toast = alerts.toast.as_ref().unwrap();
-        assert_eq!((toast.title.as_str(), toast.more), ("Song c", 2), "latest, plus the rest");
+        assert_eq!((toast.title.shown(false), toast.more), ("Song c", 2), "latest, plus the rest");
 
-        // Well after the burst: a new alert, a new sound, a fresh count.
-        let later = t0 + Duration::from_secs(10);
-        assert!(alerts.arrive(&[entry("d")], &on(), false, later));
+        // Past the sound's grouping but while the popup still shows: a new
+        // sound, and the same popup counts on with its timer restarted.
+        let t3 = t0 + Duration::from_secs(3);
+        assert!(alerts.arrive(&[entry("d")], &on(), false, t3));
+        assert_eq!(alerts.toast.as_ref().unwrap().more, 3);
+        assert_eq!(alerts.visibility(t3 + HOLD - Duration::from_millis(10)), Some(1.0));
+
+        // Once the popup is gone, the next request starts a fresh one.
+        assert_eq!(alerts.visibility(t3 + HOLD + FADE_OUT * 2), None);
+        let later = t3 + Duration::from_secs(20);
+        assert!(alerts.arrive(&[entry("e")], &on(), false, later));
         assert_eq!(alerts.toast.as_ref().unwrap().more, 0);
     }
 
