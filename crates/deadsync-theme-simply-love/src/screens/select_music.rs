@@ -21482,6 +21482,32 @@ mod tests {
     }
 
     #[test]
+    fn play_next_selects_the_requested_chart() {
+        let mut state = requests_state();
+        let mut song = (*super::test_folder_stats_song(7)).clone();
+        song.simfile_path = PathBuf::from("/songs/Pack C/Charted/song.ssc");
+        let song = Arc::new(song);
+        let mut group = state.group_entries.to_vec();
+        group.push(header("Pack C", 2, 1, Some("Pack C")));
+        group.push(super::MusicWheelEntry::Song(Arc::clone(&song)));
+        state.group_entries = group.into();
+        state.all_entries = Arc::clone(&state.group_entries);
+        state.preferred_difficulty_index = 4;
+        state.selected_steps_index = 4;
+
+        let mut view = requests_view(linked(true), &[("r1", "Pack C/Charted", "Charted")], 1);
+        let queue = view.queue.as_mut().map(Arc::make_mut).unwrap();
+        queue.entries[0].chart = Some(deadsync_online::requestline::RequestedChart {
+            hash: "test-0007-3".to_owned(),
+            difficulty: Some("hard".to_owned()),
+            meter: Some(9),
+        });
+        super::requests::apply_view(&mut state, view);
+        assert!(super::requests::play_next(&mut state));
+        assert_eq!(state.selected_steps_index, 3, "the requested hard chart");
+    }
+
+    #[test]
     fn requests_view_follows_the_queue_and_falls_back_when_it_empties() {
         let mut state = requests_state();
         let two = [("r1", "Pack A/Song A1", "Alpha"), ("r2", "Pack B/Song B1", "Gamma")];

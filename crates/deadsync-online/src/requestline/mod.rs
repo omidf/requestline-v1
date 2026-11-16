@@ -67,7 +67,7 @@ static STATUS: LazyLock<Arc<Mutex<Status>>> = LazyLock::new(|| Arc::new(Mutex::n
 static QUEUE: LazyLock<Arc<QueueCell>> = LazyLock::new(|| Arc::new(QueueCell::default()));
 
 /// The page's queue as the server last sent it, first to play first.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct QueueSnapshot {
     /// Changes whenever the queue does, including when it's forgotten.
     pub generation: u64,
