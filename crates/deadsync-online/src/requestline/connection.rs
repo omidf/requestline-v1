@@ -126,6 +126,12 @@ impl Shared {
         }
     }
 
+    fn push_new_requests(&self, fresh: Vec<QueueEntry>) {
+        if self.alive() {
+            self.queue.push_new(fresh);
+        }
+    }
+
     fn set_queue(&self, entries: Vec<QueueEntry>) {
         if self.alive() {
             self.queue.publish(entries);
@@ -350,6 +356,9 @@ struct Live<'a, E: Env> {
     said_hello: bool,
     server_hash: Option<String>,
     sync: SyncState,
+    /// Request ids in the last queue this socket heard; `None` until the first
+    /// state, which only sets the baseline so a (re)connect alerts nothing.
+    seen_ids: Option<std::collections::HashSet<String>>,
 }
 
 fn connect(url: &str, read_wait: Duration) -> Result<Socket, SessionEnd> {
@@ -412,6 +421,7 @@ fn run_socket<E: Env>(
         session,
         page: target.page_name.clone().unwrap_or_default(),
         said_hello: false,
+        seen_ids: None,
         server_hash: None,
         sync: SyncState::Idle,
     };
@@ -563,6 +573,7 @@ impl<E: Env> Live<'_, E> {
                     closed_by.as_deref().unwrap_or("nobody")
                 );
                 self.shared.set_open(open);
+                self.note_new_requests(&queue);
                 self.shared.set_queue(queue);
             }
             Incoming::Pong | Incoming::Unknown => {}
@@ -657,6 +668,21 @@ impl<E: Env> Live<'_, E> {
             Command::Shutdown => {}
         }
         Ok(())
+    }
+
+    /// Requests that weren't in the previous queue are new; tell the game.
+    fn note_new_requests(&mut self, queue: &[QueueEntry]) {
+        if let Some(seen) = &self.seen_ids {
+            let fresh: Vec<QueueEntry> = queue
+                .iter()
+                .filter(|entry| !seen.contains(&entry.id))
+                .cloned()
+                .collect();
+            if !fresh.is_empty() {
+                self.shared.push_new_requests(fresh);
+            }
+        }
+        self.seen_ids = Some(queue.iter().map(|entry| entry.id.clone()).collect());
     }
 
     fn deliver_pending_start(&mut self) -> Result<(), ()> {
@@ -995,6 +1021,49 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn only_requests_that_arrive_while_connected_are_new() {
+        let (server, url) = Server::new();
+        let ((handle, _status, _puts), queue) = start_with_queue(url, None);
+        let state = |ids: &[&str]| {
+            let entries: Vec<String> = ids
+                .iter()
+                .map(|id| format!(r#"{{"id":"{id}","songId":"p/{id}","title":"{id}","name":"n"}}"#))
+                .collect();
+            format!(r#"{{"type":"state","open":true,"queue":[{}]}}"#, entries.join(","))
+        };
+
+        let mut socket = server.accept();
+        recv_json(&mut socket);
+        send(&mut socket, HELLO_NULL);
+        // What was already queued when the game connected is not news.
+        send(&mut socket, &state(&["r1"]));
+        wait_for_queue(&queue, &["r1"]);
+        assert!(queue.take_new().is_empty());
+
+        // Two arrive, then one leaves: only the two arrivals, once each.
+        send(&mut socket, &state(&["r1", "r2", "r3"]));
+        wait_for_queue(&queue, &["r1", "r2", "r3"]);
+        send(&mut socket, &state(&["r2", "r3"]));
+        wait_for_queue(&queue, &["r2", "r3"]);
+        let ids = |v: Vec<QueueEntry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(queue.take_new()), ["r2", "r3"]);
+        assert!(queue.take_new().is_empty(), "taken once");
+
+        // Reconnect: the first state is a new baseline, even with r4 in it.
+        drop(socket);
+        let mut again = server.accept();
+        recv_json(&mut again);
+        send(&mut again, HELLO_NULL);
+        send(&mut again, &state(&["r2", "r3", "r4"]));
+        wait_for_queue(&queue, &["r2", "r3", "r4"]);
+        assert!(queue.take_new().is_empty());
+        send(&mut again, &state(&["r2", "r3", "r4", "r5"]));
+        wait_for_queue(&queue, &["r2", "r3", "r4", "r5"]);
+        assert_eq!(ids(queue.take_new()), ["r5"]);
+        handle.stop();
     }
 
     #[test]

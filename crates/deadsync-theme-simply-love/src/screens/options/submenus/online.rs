@@ -182,6 +182,53 @@ pub(in crate::screens::options) const ARROWCLOUD_OPTIONS_ROWS: &[SubRow] = &[
         choices: &[],
         inline: false,
     },
+    SubRow {
+        id: SubRowId::RequestlineNotifySound,
+        label: lookup_key("OptionsRequestline", "NotifySound"),
+        choices: &[
+            localized_choice("OptionsRequestline", "Off"),
+            localized_choice("OptionsRequestline", "SoundCoin"),
+            localized_choice("OptionsRequestline", "SoundChime"),
+            localized_choice("OptionsRequestline", "SoundDingDong"),
+            localized_choice("OptionsRequestline", "SoundNeedleDrop"),
+            localized_choice("OptionsRequestline", "SoundSelector"),
+        ],
+        inline: false,
+    },
+    SubRow {
+        id: SubRowId::RequestlineSoundTiming,
+        label: lookup_key("OptionsRequestline", "SoundDuringSongs"),
+        choices: &[
+            localized_choice("OptionsRequestline", "TimingHold"),
+            localized_choice("OptionsRequestline", "TimingNow"),
+        ],
+        inline: false,
+    },
+    SubRow {
+        id: SubRowId::RequestlineNotifyVisual,
+        label: lookup_key("OptionsRequestline", "NotifyVisual"),
+        choices: &[
+            localized_choice("OptionsRequestline", "Off"),
+            localized_choice("OptionsRequestline", "VisualNotes"),
+            localized_choice("OptionsRequestline", "VisualTicket"),
+            localized_choice("OptionsRequestline", "VisualDisc"),
+            localized_choice("OptionsRequestline", "VisualBell"),
+            localized_choice("OptionsRequestline", "VisualSlots"),
+        ],
+        inline: false,
+    },
+    SubRow {
+        id: SubRowId::RequestlineToastCorner,
+        label: lookup_key("OptionsRequestline", "ToastCorner"),
+        choices: &[
+            localized_choice("OptionsRequestline", "CornerAuto"),
+            localized_choice("OptionsRequestline", "CornerTopLeft"),
+            localized_choice("OptionsRequestline", "CornerTopRight"),
+            localized_choice("OptionsRequestline", "CornerBottomLeft"),
+            localized_choice("OptionsRequestline", "CornerBottomRight"),
+        ],
+        inline: false,
+    },
 ];
 
 pub(in crate::screens::options) const ONLINE_SCORING_OPTIONS_ROWS: &[SubRow] = &[
@@ -376,6 +423,38 @@ pub(in crate::screens::options) const ARROWCLOUD_OPTIONS_ITEMS: &[Item] = &[
         help: &[HelpEntry::Paragraph(lookup_key(
             "OptionsRequestline",
             "StatusHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineNotifySound,
+        name: lookup_key("OptionsRequestline", "NotifySound"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "NotifySoundHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineSoundTiming,
+        name: lookup_key("OptionsRequestline", "SoundDuringSongs"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "SoundDuringSongsHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineNotifyVisual,
+        name: lookup_key("OptionsRequestline", "NotifyVisual"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "NotifyVisualHelp",
+        ))],
+    },
+    Item {
+        id: ItemId::AcRequestlineToastCorner,
+        name: lookup_key("OptionsRequestline", "ToastCorner"),
+        help: &[HelpEntry::Paragraph(lookup_key(
+            "OptionsRequestline",
+            "ToastCornerHelp",
         ))],
     },
     Item {

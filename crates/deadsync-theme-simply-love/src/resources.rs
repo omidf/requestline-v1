@@ -651,6 +651,12 @@ pub const ECS15_GAMEOVER_MUSIC: &str = "assets/music/ECS15-GameOver.ogg";
 
 /// Fixed UI cues prepared before the first screen accepts input.
 pub const SFX_PATHS: &[&str] = &[
+    // Requestline new-request sounds (deadsync_config::requestline::RequestlineSound).
+    "assets/sounds/requestline/coin.ogg",
+    "assets/sounds/requestline/chime.ogg",
+    "assets/sounds/requestline/dingdong.ogg",
+    "assets/sounds/requestline/needle.ogg",
+    "assets/sounds/requestline/selector.ogg",
     "assets/sounds/boom.ogg",
     "assets/sounds/change.ogg",
     "assets/sounds/change_value.ogg",
@@ -1130,6 +1136,11 @@ mod tests {
         }
         assert!(bundled_music_asset_paths().any(|path| path == ECS15_GAMEOVER_MUSIC));
         assert!(SFX_PATHS.contains(&ECS15_EVAL_PASSED_SFX));
+        for sound in deadsync_config::requestline::RequestlineSound::ALL {
+            if let Some(path) = sound.asset_path() {
+                assert!(SFX_PATHS.contains(&path), "{path} is not prepared");
+            }
+        }
         assert!(SFX_PATHS.contains(&ECS15_EVAL_FAILED_SFX));
     }
 

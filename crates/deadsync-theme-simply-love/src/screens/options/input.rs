@@ -1215,6 +1215,14 @@ pub(super) fn apply_submenu_choice_delta(
             state.requestline.side = requestline_side_from_choice(new_index);
         }
         action = Some(requestline_effect(state));
+    } else if matches!(kind, SubmenuKind::ArrowCloud)
+        && let Some(preview) = apply_requestline_alert_choice(state, rows[row_index].id, new_index)
+    {
+        // Scrolling the sound row plays the sound it lands on.
+        if let Some(path) = preview {
+            queue_sfx(state, path);
+        }
+        action = Some(requestline_effect(state));
     } else if matches!(kind, SubmenuKind::ArrowCloud) {
         let row = &rows[row_index];
         let enabled = yes_no_from_choice(new_index);

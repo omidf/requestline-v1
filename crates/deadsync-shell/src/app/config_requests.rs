@@ -369,8 +369,13 @@ pub(super) fn execute_online(request: SimplyLoveOnlineConfigRequest) {
     match request {
         Request::TwitchChat(options) => config::runtime_update::update_twitch_chat(options),
         Request::Requestline(options) => {
+            let before = config::runtime::get().requestline;
             config::runtime_update::update_requestline(options);
-            deadsync_online::requestline::on_settings_changed();
+            // Only on/off and the profile change the connection; the alert
+            // settings are read where alerts are shown.
+            if (before.enabled, before.side) != (options.enabled, options.side) {
+                deadsync_online::requestline::on_settings_changed();
+            }
         }
         Request::EnableGrooveStats(enabled) => {
             config::runtime_update::update_enable_groovestats(enabled)

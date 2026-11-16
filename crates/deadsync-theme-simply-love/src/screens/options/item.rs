@@ -270,6 +270,10 @@ pub enum ItemId {
     AcRequestline,
     AcRequestlineProfile,
     AcRequestlineStatus,
+    AcRequestlineNotifySound,
+    AcRequestlineSoundTiming,
+    AcRequestlineNotifyVisual,
+    AcRequestlineToastCorner,
 
     // Online Scoring submenu (launcher)
     OsGsBsOptions,

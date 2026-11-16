@@ -29,7 +29,7 @@ use deadsync_profile::{PlayerSide, compat as profile};
 use log::warn;
 use serde::Deserialize;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
@@ -80,7 +80,14 @@ pub struct QueueSnapshot {
 pub(crate) struct QueueCell {
     current: Mutex<Option<Arc<QueueSnapshot>>>,
     generation: AtomicU64,
+    /// Requests that arrived since the game last asked, oldest first.
+    fresh: Mutex<Vec<QueueEntry>>,
+    has_fresh: AtomicBool,
 }
+
+/// More than this many unread new requests means nobody is reading; keep the
+/// newest.
+const FRESH_KEPT: usize = 64;
 
 impl QueueCell {
     /// A queue from a `state` message. The same queue again (only the open
@@ -106,6 +113,26 @@ impl QueueCell {
         }
     }
 
+    fn push_new(&self, fresh: Vec<QueueEntry>) {
+        let Ok(mut pending) = self.fresh.lock() else {
+            return;
+        };
+        pending.extend(fresh);
+        let over = pending.len().saturating_sub(FRESH_KEPT);
+        pending.drain(..over);
+        self.has_fresh.store(true, Ordering::Release);
+    }
+
+    fn take_new(&self) -> Vec<QueueEntry> {
+        if !self.has_fresh.swap(false, Ordering::AcqRel) {
+            return Vec::new();
+        }
+        self.fresh
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+    }
+
     fn snapshot(&self) -> Option<Arc<QueueSnapshot>> {
         self.current.lock().ok().and_then(|q| q.clone())
     }
@@ -119,6 +146,13 @@ impl QueueCell {
 #[must_use]
 pub fn queue_snapshot() -> Option<Arc<QueueSnapshot>> {
     QUEUE.snapshot()
+}
+
+/// Requests that arrived since the last call, oldest first. Never the queue
+/// already there when the game (re)connected. Cheap when there are none.
+#[must_use]
+pub fn take_new_requests() -> Vec<QueueEntry> {
+    QUEUE.take_new()
 }
 
 /// Cheap change check: compare with the last value seen before taking a

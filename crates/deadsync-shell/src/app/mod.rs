@@ -7,6 +7,7 @@ mod audio_requests;
 mod browser_skin;
 mod commands;
 mod config_requests;
+mod requestline_alerts;
 #[cfg(test)]
 mod course_transition_tests;
 mod evaluation_views;
@@ -1650,6 +1651,8 @@ pub struct App {
     /// prewarm and borrowed by hot command submission.
     gameplay_sfx: GameplaySfx,
     ui_sfx: audio_requests::UiSfx,
+    /// Requestline's new-request sound and popup.
+    requestline_alerts: requestline_alerts::RequestAlerts,
     /// At most one CPU-only Gameplay or Practice construction job. Song Lua charts build
     /// their retained actor session here so the application thread can
     /// continue pumping the window and rendering the loading frame. The job is
@@ -5424,6 +5427,7 @@ impl App {
             audio,
             gameplay_sfx: GameplaySfx::default(),
             ui_sfx,
+            requestline_alerts: requestline_alerts::RequestAlerts::default(),
             pending_gameplay_init: None,
             pending_song_lua_reload: None,
             pending_gameplay_lua_inputs: Vec::new(),
@@ -8404,7 +8408,9 @@ impl App {
             ));
         }
 
-        self.append_screenshot_overlay_actors(&mut actors, Instant::now());
+        let now = Instant::now();
+        self.append_requestline_alert_actors(&mut actors, now);
+        self.append_screenshot_overlay_actors(&mut actors, now);
 
         (actors, CLEAR, gameplay_segments)
     }

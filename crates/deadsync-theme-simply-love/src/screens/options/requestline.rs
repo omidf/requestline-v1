@@ -24,6 +24,57 @@ pub(super) fn requestline_effect(state: &State) -> ThemeEffect {
     ))
 }
 
+/// A new-request alert row changed: store it. `None` for any other row;
+/// otherwise the sound to preview, if this was the sound row.
+pub(super) fn apply_requestline_alert_choice(
+    state: &mut State,
+    row: SubRowId,
+    index: usize,
+) -> Option<Option<&'static str>> {
+    use deadsync_config::requestline::{
+        RequestlineSound, RequestlineSoundTiming, RequestlineToastCorner, RequestlineVisual,
+    };
+    let alerts = &mut state.requestline;
+    match row {
+        SubRowId::RequestlineNotifySound => {
+            alerts.sound = RequestlineSound::from_index(index);
+            return Some(alerts.sound.asset_path());
+        }
+        SubRowId::RequestlineSoundTiming => {
+            alerts.sound_timing = RequestlineSoundTiming::from_index(index);
+        }
+        SubRowId::RequestlineNotifyVisual => alerts.visual = RequestlineVisual::from_index(index),
+        SubRowId::RequestlineToastCorner => alerts.corner = RequestlineToastCorner::from_index(index),
+        _ => return None,
+    }
+    Some(None)
+}
+
+/// The sound-timing row only matters with a sound on, the corner row only
+/// with a toast on.
+pub(super) fn requestline_row_shown(state: &State, row: SubRowId) -> bool {
+    use deadsync_config::requestline::{RequestlineSound, RequestlineVisual};
+    let choice = |id| {
+        get_choice_by_id(
+            &state.sub[SubmenuKind::ArrowCloud].choice_indices,
+            ARROWCLOUD_OPTIONS_ROWS,
+            id,
+        )
+        .unwrap_or(0)
+    };
+    match row {
+        SubRowId::RequestlineSoundTiming => {
+            RequestlineSound::from_index(choice(SubRowId::RequestlineNotifySound))
+                != RequestlineSound::Off
+        }
+        SubRowId::RequestlineToastCorner => {
+            RequestlineVisual::from_index(choice(SubRowId::RequestlineNotifyVisual))
+                != RequestlineVisual::Off
+        }
+        _ => true,
+    }
+}
+
 /// requestline is an ArrowCloud feature: its rows go dim while ArrowCloud is off.
 pub(super) fn arrowcloud_enabled(state: &State) -> bool {
     get_choice_by_id(
@@ -107,6 +158,46 @@ mod tests {
         state.sub_selected = row_index(SubRowId::RequestlineProfile);
         apply_submenu_choice_delta(&mut state, &AssetManager::new(), 1, NavWrap::Wrap);
         assert_eq!(state.requestline.side, RequestlineSide::P2);
+    }
+
+    #[test]
+    fn alert_rows_store_settings_and_preview_the_sound() {
+        use deadsync_config::requestline::{RequestlineSound, RequestlineVisual};
+        let mut state = super::super::tests::init();
+        set_arrowcloud(&mut state, true);
+        state.view = OptionsView::Submenu(SubmenuKind::ArrowCloud);
+        let visible = |state: &State| -> Vec<SubRowId> {
+            submenu_visible_row_indices(state, SubmenuKind::ArrowCloud, ARROWCLOUD_OPTIONS_ROWS)
+                .into_iter()
+                .map(|i| ARROWCLOUD_OPTIONS_ROWS[i].id)
+                .collect()
+        };
+        // Off by default, so the rows that refine them stay out of the way.
+        assert!(!visible(&state).contains(&SubRowId::RequestlineSoundTiming));
+        assert!(!visible(&state).contains(&SubRowId::RequestlineToastCorner));
+
+        state.sub_selected = visible(&state)
+            .iter()
+            .position(|id| *id == SubRowId::RequestlineNotifySound)
+            .unwrap();
+        state.pending_sfx.clear();
+        let effect = apply_submenu_choice_delta(&mut state, &AssetManager::new(), 1, NavWrap::Wrap);
+        assert!(effect.is_some(), "persisted like the other requestline rows");
+        assert_eq!(state.requestline.sound, RequestlineSound::Coin);
+        assert!(
+            state.pending_sfx.contains(&"assets/sounds/requestline/coin.ogg"),
+            "{:?}",
+            state.pending_sfx
+        );
+        assert!(visible(&state).contains(&SubRowId::RequestlineSoundTiming));
+
+        state.sub_selected = visible(&state)
+            .iter()
+            .position(|id| *id == SubRowId::RequestlineNotifyVisual)
+            .unwrap();
+        apply_submenu_choice_delta(&mut state, &AssetManager::new(), 1, NavWrap::Wrap);
+        assert_eq!(state.requestline.visual, RequestlineVisual::Notes);
+        assert!(visible(&state).contains(&SubRowId::RequestlineToastCorner));
     }
 
     #[test]

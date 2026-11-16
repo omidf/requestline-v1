@@ -1705,6 +1705,19 @@ pub fn init(view: OptionsInitView) -> State {
         SubRowId::RequestlineProfile,
         requestline_side_choice_index(cfg.requestline.side),
     );
+    for (row, index) in [
+        (SubRowId::RequestlineNotifySound, cfg.requestline.sound.index()),
+        (SubRowId::RequestlineSoundTiming, cfg.requestline.sound_timing.index()),
+        (SubRowId::RequestlineNotifyVisual, cfg.requestline.visual.index()),
+        (SubRowId::RequestlineToastCorner, cfg.requestline.corner.index()),
+    ] {
+        set_choice_by_id(
+            &mut state.sub[SubmenuKind::ArrowCloud].choice_indices,
+            ARROWCLOUD_OPTIONS_ROWS,
+            row,
+            index,
+        );
+    }
     set_choice_by_id(
         &mut state.sub[SubmenuKind::GrooveStats].choice_indices,
         GROOVESTATS_OPTIONS_ROWS,

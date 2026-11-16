@@ -225,6 +225,10 @@ pub enum SubRowId {
     RequestlineEnabled,
     RequestlineProfile,
     RequestlineStatus,
+    RequestlineNotifySound,
+    RequestlineSoundTiming,
+    RequestlineNotifyVisual,
+    RequestlineToastCorner,
     // Online Scoring (launcher)
     GsBsOptions,
     ArrowCloudOptions,

@@ -14,6 +14,7 @@ pub mod noteskin_draw;
 pub mod pad_display;
 pub mod profile_boxes;
 pub mod qr_code;
+pub mod request_toast;
 pub mod screen_bar;
 pub mod select_flow_footer;
 pub mod setting_search;
