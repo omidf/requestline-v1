@@ -1005,6 +1005,18 @@ pub struct SelectMusicSettingsView {
     pub sync_confidence_percent: u8,
 }
 
+/// Requestline as Select Music shows it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct SelectMusicRequestlineView {
+    /// Requestline and ArrowCloud are both turned on.
+    pub enabled: bool,
+    pub status: deadsync_online::requestline::Status,
+    /// `queue_generation()` when this view was taken; moves with every queue
+    /// change, including the queue being forgotten.
+    pub generation: u64,
+    pub queue: Option<Arc<deadsync_online::requestline::QueueSnapshot>>,
+}
+
 /// Shell-prepared runtime data consumed by Simply Love's Select Music screen.
 #[derive(Clone, Debug)]
 pub struct SelectMusicRuntimeView {
@@ -1023,6 +1035,8 @@ pub struct SelectMusicRuntimeView {
     pub downloads: Option<Vec<SelectMusicDownloadView>>,
     /// Replacement snapshot emitted only when the shop runtime changes.
     pub srpg_shop: Option<Arc<deadsync_online::srpg_shop::SrpgShopSnapshot>>,
+    /// Replacement Requestline state emitted only when it changes.
+    pub requestline: Option<SelectMusicRequestlineView>,
     /// Replacement config state emitted only when the compiled policy changes.
     pub settings: Option<SelectMusicSettingsView>,
     /// Replacement snapshot emitted only when wheel inputs or score data change.
@@ -1048,6 +1062,7 @@ impl Default for SelectMusicRuntimeView {
             lobby: None,
             downloads: None,
             srpg_shop: None,
+            requestline: None,
             settings: None,
             music_wheel: None,
             scoreboxes: None,

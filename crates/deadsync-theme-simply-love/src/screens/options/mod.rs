@@ -125,6 +125,7 @@ use render::*;
 
 // Public API re-exports
 pub use download_packs::sync_stepmaniaonline;
+pub(crate) use requestline::requestline_status_label;
 pub use requestline::sync_requestline_status;
 pub use input::handle_input;
 pub use layout::clear_submenu_row_layout_cache;

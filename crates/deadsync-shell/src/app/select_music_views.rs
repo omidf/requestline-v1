@@ -10,7 +10,7 @@ use deadsync_theme_simply_love::views::{
     SelectMusicDownloadView, SelectMusicLeaderboardRequest, SelectMusicLeaderboardSideView,
     SelectMusicLeaderboardView, SelectMusicPadProfileView, SelectMusicPolicyView,
     SelectMusicProfileView, SelectMusicRuntimeView, SelectMusicScoreboxRequest,
-    SelectMusicSessionView, SelectMusicSettingsView,
+    SelectMusicRequestlineView, SelectMusicSessionView, SelectMusicSettingsView,
 };
 use std::{sync::Arc, time::Instant};
 
@@ -390,6 +390,26 @@ impl App {
             self.select_music_downloads_visible = false;
             None
         };
+        let requestline = {
+            let config = config::runtime::get();
+            let enabled = config.enable_arrowcloud && config.requestline.enabled;
+            let status = deadsync_online::requestline::status();
+            let generation = deadsync_online::requestline::queue_generation();
+            select_music::requestline_view_stale(
+                &self.state.screens.select_music_state,
+                enabled,
+                &status,
+                generation,
+            )
+            .then(|| SelectMusicRequestlineView {
+                enabled,
+                status,
+                generation,
+                // The snapshot may be newer than `generation`; the next frame
+                // sees the counter moved and sends it again.
+                queue: deadsync_online::requestline::queue_snapshot(),
+            })
+        };
         let shop_visible =
             select_music::srpg_shop_overlay_visible(&self.state.screens.select_music_state);
         let srpg_shop = if shop_visible {
@@ -630,6 +650,7 @@ impl App {
                 lobby,
                 downloads,
                 srpg_shop,
+                requestline,
                 settings,
                 music_wheel,
                 scoreboxes,

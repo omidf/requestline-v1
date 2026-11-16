@@ -51,7 +51,14 @@ pub(super) fn requestline_status_text(state: &State) -> Arc<str> {
     if !state.requestline.enabled {
         return tr(S, "StatusOff");
     }
-    match &state.requestline_status {
+    requestline_status_label(&state.requestline_status)
+}
+
+/// What a client status means, in the words the Requests Status row uses.
+/// Select Music's Requestline... menu says the same when not connected.
+pub(crate) fn requestline_status_label(status: &Status) -> Arc<str> {
+    const S: &str = "OptionsRequestline";
+    match status {
         // On, but nothing has been checked yet this session.
         Status::Off => tr(S, "StatusPending"),
         Status::NoKey => tr(S, "StatusNoKey"),

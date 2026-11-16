@@ -86,6 +86,9 @@ use std::time::{Duration, Instant};
 mod pack_sync;
 #[path = "select_music/playlists.rs"]
 mod playlists;
+#[path = "select_music/requests.rs"]
+mod requests;
+pub use requests::requestline_view_stale;
 use playlists::{PlaylistCacheEntry, build_playlist_library, lobby_song_path};
 #[cfg(test)]
 use playlists::{build_playlist_entries_from_text, build_playlist_song_lookup};
@@ -697,6 +700,10 @@ pub fn sync_runtime_view(state: &mut State, view: SelectMusicRuntimeView) {
     }
     if let Some(srpg_shop) = view.srpg_shop {
         state.srpg_shop_snapshot = srpg_shop;
+    }
+    if let Some(requestline) = view.requestline {
+        requests::apply_view(state, requestline);
+        rebuild_select_music_menu(state);
     }
     if let Some(settings) = view.settings {
         state.arrow_bounce_offset = settings.arrow_bounce_offset;
@@ -1775,6 +1782,8 @@ pub struct State {
     joined_favorites_entries: Arc<[MusicWheelEntry]>,
     playlist_entries: Arc<[MusicWheelEntry]>,
     playlist_library: Vec<PlaylistCacheEntry>,
+    /// Requestline's queue as a wheel view, and what the menu says about it.
+    requests: requests::Requests,
     playlist_views: Vec<SelectMusicPlaylistView>,
     history: SelectMusicHistoryView,
     active_playlist_id: Option<String>,
@@ -3530,12 +3539,15 @@ fn apply_wheel_sort(state: &mut State, sort_mode: WheelSortMode) {
                 .or_else(|| first_header_name(&state.all_entries));
         }
         WheelSortMode::Playlist => {
-            if let Some(playlist_entries) = state
-                .active_playlist_id
-                .as_deref()
-                .and_then(|active_id| playlist_cache_entry(state, active_id))
-                .map(|playlist| Arc::clone(&playlist.entries))
-            {
+            let active = state.active_playlist_id.as_deref();
+            let playlist_entries = if active == Some(requests::REQUESTS_PLAYLIST_ID) {
+                requests::playlist_entries(state)
+            } else {
+                active
+                    .and_then(|active_id| playlist_cache_entry(state, active_id))
+                    .map(|playlist| Arc::clone(&playlist.entries))
+            };
+            if let Some(playlist_entries) = playlist_entries {
                 state.playlist_entries = playlist_entries;
                 state.all_entries = Arc::clone(&state.playlist_entries);
                 state.expanded_pack_name = selected_song
@@ -3889,6 +3901,7 @@ pub fn init(init_view: SelectMusicInitView) -> State {
         top_grades_p2_entries,
         joined_favorites_entries,
         playlist_entries: Arc::from([]),
+        requests: requests::Requests::default(),
         playlist_library,
         playlist_views: init_view.playlists,
         history: init_view.history,
@@ -4147,6 +4160,7 @@ pub fn init_placeholder() -> State {
         top_grades_p2_entries: Arc::from([]),
         joined_favorites_entries: Arc::from([]),
         playlist_entries: Arc::from([]),
+        requests: requests::Requests::default(),
         playlist_library: Vec::new(),
         playlist_views: Vec::new(),
         history: SelectMusicHistoryView::default(),
@@ -5359,6 +5373,7 @@ fn build_select_music_menu(state: &State) -> select_music_menu::MenuLists {
     };
 
     select_music_menu::MenuLists {
+        requestline: requests::menu_items(state),
         standalone,
         sorts,
         profile: profile_items,
@@ -10032,6 +10047,27 @@ fn dispatch_menu_action(
             hide_select_music_menu(state);
             ThemeEffect::None
         }
+        select_music_menu::Action::PlayNextRequest => {
+            // Nothing playable: stay in the menu, whose label says why.
+            if requests::play_next(state) {
+                hide_select_music_menu(state);
+            }
+            ThemeEffect::None
+        }
+        select_music_menu::Action::ViewRequests => {
+            if requests::view_requests(state) {
+                hide_select_music_menu(state);
+            }
+            ThemeEffect::None
+        }
+        select_music_menu::Action::ToggleRequests => {
+            // The menu relabels when the server's answer comes back.
+            if let Some(open) = requests::toggled_open(state) {
+                queue_online(state, crate::SimplyLoveOnlineRequest::SetRequestlineOpen(open));
+            }
+            ThemeEffect::None
+        }
+        select_music_menu::Action::RequestlineStatus => ThemeEffect::None,
         select_music_menu::Action::SortByPlaylist(id) => {
             state.active_playlist_id = Some(id);
             if state.sort_mode == WheelSortMode::Playlist {
@@ -17121,6 +17157,7 @@ mod tests {
                     phase: deadsync_online::srpg_shop::SrpgShopPhase::Ready,
                     ..Default::default()
                 })),
+                requestline: None,
                 settings: Some(crate::views::SelectMusicSettingsView {
                     arrow_bounce_offset: -0.25,
                     policy: crate::views::SelectMusicPolicyView {
@@ -21330,6 +21367,183 @@ mod tests {
         assert_eq!(state.preferred_difficulty_index, 1);
         assert_eq!(state.p2_selected_steps_index, 4);
         assert_eq!(state.p2_preferred_difficulty_index, 4);
+    }
+
+    fn requests_view(
+        status: deadsync_online::requestline::Status,
+        ids: &[(&str, &str, &str)],
+        generation: u64,
+    ) -> crate::views::SelectMusicRequestlineView {
+        let entries = ids
+            .iter()
+            .map(|(id, song_id, title)| deadsync_online::requestline::QueueEntry {
+                id: (*id).to_owned(),
+                song_id: (*song_id).to_owned(),
+                title: (*title).to_owned(),
+                name: "Viewer".to_owned(),
+                chart: None,
+            })
+            .collect();
+        crate::views::SelectMusicRequestlineView {
+            enabled: true,
+            status,
+            generation,
+            queue: Some(Arc::new(deadsync_online::requestline::QueueSnapshot {
+                generation,
+                entries,
+            })),
+        }
+    }
+
+    fn linked(open: bool) -> deadsync_online::requestline::Status {
+        deadsync_online::requestline::Status::Linked {
+            page: "Page".to_owned(),
+            requests_open: open,
+        }
+    }
+
+    fn requests_state() -> super::State {
+        let mut state = init_placeholder();
+        state.group_entries = vec![
+            header("Pack A", 0, 2, Some("Pack A")),
+            super::MusicWheelEntry::Song(test_song_in_pack("Pack A", "Song A1", "Alpha")),
+            super::MusicWheelEntry::Song(test_song_in_pack("Pack A", "Song A2", "Beta")),
+            header("Pack B", 1, 1, Some("Pack B")),
+            super::MusicWheelEntry::Song(test_song_in_pack("Pack B", "Song B1", "Gamma")),
+        ]
+        .into();
+        state.all_entries = Arc::clone(&state.group_entries);
+        state.sort_mode = WheelSortMode::Group;
+        state
+    }
+
+    fn wheel_titles(entries: &[super::MusicWheelEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|entry| match entry {
+                super::MusicWheelEntry::Song(song) => song.title.clone(),
+                super::MusicWheelEntry::PackHeader { name, song_count, .. } => {
+                    format!("[{name} {song_count}]")
+                }
+            })
+            .collect()
+    }
+
+    fn requestline_labels(state: &super::State) -> Vec<(String, String)> {
+        super::requests::menu_items(state)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|item| (item.top_label.as_str().to_owned(), item.bottom_label.as_str().to_owned()))
+            .collect()
+    }
+
+    #[test]
+    fn requests_view_keeps_queue_order_and_skips_songs_not_in_the_library() {
+        let mut state = requests_state();
+        super::requests::apply_view(
+            &mut state,
+            requests_view(
+                linked(true),
+                &[
+                    ("r1", "Pack B/Song B1", "Gamma"),
+                    ("r2", "Pack C/Gone", "Gone"),
+                    ("r3", "pack a/song a2", "Beta"),
+                ],
+                1,
+            ),
+        );
+        assert_eq!(
+            wheel_titles(&state.requests.entries),
+            ["[Requests 2]", "Gamma", "Beta"]
+        );
+        let labels = requestline_labels(&state);
+        assert_eq!(labels.len(), 3);
+        assert!(labels[0].1.contains("Gamma") && labels[0].1.contains("Viewer"), "{labels:?}");
+        assert!(labels[1].1.contains('3') && labels[1].1.contains('1'), "{labels:?}");
+    }
+
+    #[test]
+    fn play_next_shows_the_requests_on_the_first_playable_one() {
+        let mut state = requests_state();
+        super::requests::apply_view(
+            &mut state,
+            requests_view(
+                linked(true),
+                &[("r1", "Pack Z/Missing", "Missing"), ("r2", "Pack A/Song A2", "Beta")],
+                1,
+            ),
+        );
+        assert!(super::requests::play_next(&mut state));
+        assert!(super::requests::showing(&state));
+        assert_eq!(
+            super::selected_song_arc(&state).map(|song| song.title.clone()).as_deref(),
+            Some("Beta")
+        );
+    }
+
+    #[test]
+    fn requests_view_follows_the_queue_and_falls_back_when_it_empties() {
+        let mut state = requests_state();
+        let two = [("r1", "Pack A/Song A1", "Alpha"), ("r2", "Pack B/Song B1", "Gamma")];
+        super::requests::apply_view(&mut state, requests_view(linked(true), &two, 1));
+        assert!(super::requests::view_requests(&mut state));
+        assert_eq!(wheel_titles(&state.all_entries), ["[Requests 2]", "Alpha", "Gamma"]);
+
+        // r1 was played: the wheel drops it in place.
+        super::requests::apply_view(&mut state, requests_view(linked(true), &two[1..], 2));
+        assert!(super::requests::showing(&state));
+        assert_eq!(wheel_titles(&state.all_entries), ["[Requests 1]", "Gamma"]);
+
+        // Nothing left: back to the library rather than an empty wheel.
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[], 3));
+        assert!(!super::requests::showing(&state));
+        assert_eq!(state.sort_mode, WheelSortMode::Group);
+        assert!(!super::requests::view_requests(&mut state), "nothing to show");
+        assert!(!super::requests::play_next(&mut state), "nothing to play");
+    }
+
+    #[test]
+    fn requestline_menu_follows_the_connection() {
+        let mut state = requests_state();
+        assert!(super::requests::menu_items(&state).is_none(), "no view yet");
+
+        let mut off = requests_view(linked(true), &[], 1);
+        off.enabled = false;
+        super::requests::apply_view(&mut state, off);
+        assert!(super::requests::menu_items(&state).is_none(), "turned off");
+
+        super::requests::apply_view(
+            &mut state,
+            requests_view(deadsync_online::requestline::Status::Unreachable, &[], 2),
+        );
+        let items = super::requests::menu_items(&state).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].action, super::select_music_menu::Action::RequestlineStatus);
+        assert_eq!(super::requests::toggled_open(&state), None);
+
+        super::requests::apply_view(&mut state, requests_view(linked(false), &[], 3));
+        assert_eq!(super::requests::toggled_open(&state), Some(true));
+        let items = super::requests::menu_items(&state).unwrap();
+        assert_eq!(
+            items.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
+            [
+                super::select_music_menu::Action::PlayNextRequest,
+                super::select_music_menu::Action::ViewRequests,
+                super::select_music_menu::Action::ToggleRequests,
+            ]
+        );
+    }
+
+    #[test]
+    fn requestline_view_is_stale_only_when_something_changed() {
+        let mut state = requests_state();
+        let status = linked(true);
+        assert!(super::requestline_view_stale(&state, true, &status, 4));
+        super::requests::apply_view(&mut state, requests_view(status.clone(), &[], 4));
+        assert!(!super::requestline_view_stale(&state, true, &status, 4));
+        assert!(super::requestline_view_stale(&state, true, &status, 5));
+        assert!(super::requestline_view_stale(&state, false, &status, 4));
+        assert!(super::requestline_view_stale(&state, true, &linked(false), 4));
     }
 
     #[test]

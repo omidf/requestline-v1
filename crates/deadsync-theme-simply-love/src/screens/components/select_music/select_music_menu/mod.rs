@@ -65,6 +65,14 @@ pub enum Action {
     SortByTopGradesP1,
     SortByTopGradesP2,
     SortByPlaylist(String),
+    /// Requestline: show the requests on the wheel, on the next playable one.
+    PlayNextRequest,
+    /// Requestline: show the requests on the wheel.
+    ViewRequests,
+    /// Requestline: open or close requests on the page.
+    ToggleRequests,
+    /// Requestline is not connected; the item only explains why.
+    RequestlineStatus,
     /// Apply a pad-config preset/profile to a physical pad (quick recall).
     /// `preset` distinguishes a built-in preset name from a saved config name.
     ApplyPadProfile {
@@ -119,6 +127,7 @@ pub(super) fn localized_label(label: &TextContent) -> TextContent {
         "Pad Profile..." => "CategoryPadProfile",
         "Styles..." => "CategoryStyles",
         "Playlists..." => "CategoryPlaylists",
+        "Requestline..." => "CategoryRequestline",
         "Sort By" => "SortBy",
         "Series" => "Series",
         "Group" => "Group",

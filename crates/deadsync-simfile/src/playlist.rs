@@ -246,6 +246,13 @@ fn visit_playlist_section(
     visit(name, songs.drain(..));
 }
 
+/// The song one `Pack/SongDir` line names, or `None`. Unlike playlist text,
+/// `---` and `/*` mean nothing here: the line is only ever a song.
+pub fn find_song(lookup: &PlaylistSongLookup, song_path: &str) -> Option<Arc<SongData>> {
+    let mut normalized = String::new();
+    find_playlist_song(lookup, song_path.trim(), &mut normalized)
+}
+
 fn find_playlist_song(
     lookup: &PlaylistSongLookup,
     line: &str,
@@ -454,5 +461,31 @@ mod tests {
             playlist_entries_from_text("folder pack/folder song\n", "Fallback Playlist", &lookup);
 
         assert_eq!(song_titles(&entries), ["Fallback"]);
+    }
+
+    #[test]
+    fn find_song_reads_one_line_as_a_song_only() {
+        let lookup = build_playlist_song_lookup([
+            PlaylistSongSource {
+                group_name: Some("Pack".to_string()),
+                song: song("Pack", "Song", "Song"),
+                lobby_path: None,
+            },
+            PlaylistSongSource {
+                group_name: Some("---Odd".to_string()),
+                song: song("---Odd", "Tune", "Tune"),
+                lobby_path: None,
+            },
+        ]);
+
+        assert_eq!(find_song(&lookup, "pack/song").map(|s| s.title.clone()).as_deref(), Some("Song"));
+        assert_eq!(
+            find_song(&lookup, "---Odd/Tune").map(|s| s.title.clone()).as_deref(),
+            Some("Tune"),
+            "a pack starting with --- is still a pack"
+        );
+        assert!(find_song(&lookup, "Pack/*").is_none(), "no wildcards");
+        assert!(find_song(&lookup, "Pack/Missing").is_none());
+        assert!(find_song(&lookup, "").is_none());
     }
 }

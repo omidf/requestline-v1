@@ -41,6 +41,7 @@ pub enum Category {
     PadProfile,
     Styles,
     Playlists,
+    Requestline,
 }
 
 /// A visible entry in the select music menu wheel.
@@ -112,6 +113,8 @@ pub fn open() -> VisibleState {
 
 /// Named struct for the category item lists, replacing the 5-element tuple.
 pub struct CategoryItemLists {
+    /// `None` unless Requestline is on. Listed first among the categories.
+    pub requestline: Option<Vec<Item>>,
     pub standalone: Vec<Item>,
     pub sorts: Vec<Item>,
     pub profile: Option<Vec<Item>>,
@@ -126,6 +129,7 @@ pub struct CategoryItemLists {
 /// Build the flattened entry list based on current category expansion state.
 pub fn build_entries(lists: CategoryItemLists, categories: &CategoryState) -> Vec<Entry> {
     let mut groups = [
+        (Category::Requestline, "Requestline...", lists.requestline),
         (Category::Sorts, "Sorts...", Some(lists.sorts)),
         (Category::Profile, "Profile...", lists.profile),
         (Category::Advanced, "Advanced...", Some(lists.advanced)),

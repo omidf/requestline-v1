@@ -275,6 +275,8 @@ pub enum SimplyLoveOnlineRequest {
         item_id: String,
         type_id: u8,
     },
+    /// Requestline's in-game switch: open or close the page's requests.
+    SetRequestlineOpen(bool),
     FetchGrade(String),
 }
 

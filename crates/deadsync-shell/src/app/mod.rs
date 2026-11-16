@@ -6684,6 +6684,12 @@ impl App {
                     deadsync_online::srpg_shop::runtime_purchase(shop_id, item_id, type_id);
                     Vec::new()
                 }
+                SimplyLoveRuntimeRequest::Online(SimplyLoveOnlineRequest::SetRequestlineOpen(
+                    open,
+                )) => {
+                    deadsync_online::requestline::set_requests_open(open);
+                    Vec::new()
+                }
             },
         };
         self.run_commands(commands, event_loop);
