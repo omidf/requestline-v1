@@ -229,11 +229,11 @@ pub(super) fn menu_items(state: &State) -> Option<Vec<select_music_menu::Item>> 
         None if queue.is_empty() => crate::i18n::tr(S, "QueueIsEmpty"),
         None => crate::i18n::tr(S, "NoneInLibrary"),
     };
-    // Say what pressing it does; the line under it says how things stand.
+    // How things stand, and under it what pressing it does.
     let (switch_top, switch_bottom) = if open {
-        ("CloseRequests", "RequestsAreOpen")
+        ("RequestsStatusOpen", "TurnRequestsOff")
     } else {
-        ("OpenRequests", "RequestsAreClosed")
+        ("RequestsStatusClosed", "TurnRequestsOn")
     };
     Some(vec![
         item(queue_top, queue_bottom, Action::PlayNextRequest),
