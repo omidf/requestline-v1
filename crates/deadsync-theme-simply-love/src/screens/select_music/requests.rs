@@ -165,10 +165,6 @@ fn show(state: &mut State) -> bool {
     showing(state)
 }
 
-pub(super) fn view_requests(state: &mut State) -> bool {
-    show(state)
-}
-
 /// Show the Requests view on the first request this library can play, with
 /// its chart selected when the viewer picked one.
 pub(super) fn play_next(state: &mut State) -> bool {
@@ -221,36 +217,26 @@ pub(super) fn menu_items(state: &State) -> Option<Vec<select_music_menu::Item>> 
     };
 
     let queue = queue(state);
-    let empty = crate::i18n::tr(S, "QueueIsEmpty");
+    let count = queue.len().to_string();
+    let queue_top = crate::i18n::tr_fmt(S, "RequestQueue", &[("count", &count)]);
     let next = state.requests.playable.first().map(|(index, _)| &queue[*index]);
-    let next_label = match next {
+    let queue_bottom = match next {
         Some(entry) => crate::i18n::tr_fmt(
             S,
-            "RequestTitleFor",
+            "NextRequest",
             &[("title", entry.title.as_str()), ("name", entry.name.as_str())],
         ),
-        None => Arc::clone(&empty),
+        None if queue.is_empty() => crate::i18n::tr(S, "QueueIsEmpty"),
+        None => crate::i18n::tr(S, "NoneInLibrary"),
     };
-    let missing = queue.len() - state.requests.playable.len();
-    let count = queue.len().to_string();
-    let missing_count = missing.to_string();
-    let in_queue = match (queue.len(), missing) {
-        (0, _) => Arc::clone(&empty),
-        (_, 0) => crate::i18n::tr_fmt(S, "RequestsInQueue", &[("count", &count)]),
-        _ => crate::i18n::tr_fmt(
-            S,
-            "RequestsInQueueMissing",
-            &[("count", &count), ("missing", &missing_count)],
-        ),
-    };
+    // Say what pressing it does; the line under it says how things stand.
     let (switch_top, switch_bottom) = if open {
-        ("RequestsOn", "RequestsOnHelp")
+        ("CloseRequests", "RequestsAreOpen")
     } else {
-        ("RequestsOff", "RequestsOffHelp")
+        ("OpenRequests", "RequestsAreClosed")
     };
     Some(vec![
-        item(crate::i18n::tr(S, "PlayNextRequest"), next_label, Action::PlayNextRequest),
-        item(crate::i18n::tr(S, "ViewRequests"), in_queue, Action::ViewRequests),
+        item(queue_top, queue_bottom, Action::PlayNextRequest),
         item(
             crate::i18n::tr(S, switch_top),
             crate::i18n::tr(S, switch_bottom),

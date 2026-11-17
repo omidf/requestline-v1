@@ -67,8 +67,6 @@ pub enum Action {
     SortByPlaylist(String),
     /// Requestline: show the requests on the wheel, on the next playable one.
     PlayNextRequest,
-    /// Requestline: show the requests on the wheel.
-    ViewRequests,
     /// Requestline: open or close requests on the page.
     ToggleRequests,
     /// Requestline is not connected; the item only explains why.

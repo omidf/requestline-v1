@@ -113,7 +113,7 @@ pub fn open() -> VisibleState {
 
 /// Named struct for the category item lists, replacing the 5-element tuple.
 pub struct CategoryItemLists {
-    /// `None` unless Requestline is on. Listed first among the categories.
+    /// `None` unless Requestline is on. Listed last, so it is one press up from the top.
     pub requestline: Option<Vec<Item>>,
     pub standalone: Vec<Item>,
     pub sorts: Vec<Item>,
@@ -129,13 +129,13 @@ pub struct CategoryItemLists {
 /// Build the flattened entry list based on current category expansion state.
 pub fn build_entries(lists: CategoryItemLists, categories: &CategoryState) -> Vec<Entry> {
     let mut groups = [
-        (Category::Requestline, "Requestline...", lists.requestline),
         (Category::Sorts, "Sorts...", Some(lists.sorts)),
         (Category::Profile, "Profile...", lists.profile),
         (Category::Advanced, "Advanced...", Some(lists.advanced)),
         (Category::PadProfile, "Pad Profile...", lists.pad_profile),
         (Category::Styles, "Styles...", lists.styles),
         (Category::Playlists, "Playlists...", lists.playlists),
+        (Category::Requestline, "Requestline...", lists.requestline),
     ];
     // The first available expanded category owns the entire wheel.
     for (category, label, items) in &mut groups {

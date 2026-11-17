@@ -10054,12 +10054,6 @@ fn dispatch_menu_action(
             }
             ThemeEffect::None
         }
-        select_music_menu::Action::ViewRequests => {
-            if requests::view_requests(state) {
-                hide_select_music_menu(state);
-            }
-            ThemeEffect::None
-        }
         select_music_menu::Action::ToggleRequests => {
             // The menu relabels when the server's answer comes back.
             if let Some(open) = requests::toggled_open(state) {
@@ -21457,9 +21451,9 @@ mod tests {
             ["[Requests 2]", "Gamma", "Beta"]
         );
         let labels = requestline_labels(&state);
-        assert_eq!(labels.len(), 3);
+        assert_eq!(labels.len(), 2);
+        assert!(labels[0].0.contains('3'), "the whole queue counts: {labels:?}");
         assert!(labels[0].1.contains("Gamma") && labels[0].1.contains("Viewer"), "{labels:?}");
-        assert!(labels[1].1.contains('3') && labels[1].1.contains('1'), "{labels:?}");
     }
 
     #[test]
@@ -21512,7 +21506,7 @@ mod tests {
         let mut state = requests_state();
         let two = [("r1", "Pack A/Song A1", "Alpha"), ("r2", "Pack B/Song B1", "Gamma")];
         super::requests::apply_view(&mut state, requests_view(linked(true), &two, 1));
-        assert!(super::requests::view_requests(&mut state));
+        assert!(super::requests::play_next(&mut state));
         assert_eq!(wheel_titles(&state.all_entries), ["[Requests 2]", "Alpha", "Gamma"]);
 
         // r1 was played: the wheel drops it in place.
@@ -21524,7 +21518,6 @@ mod tests {
         super::requests::apply_view(&mut state, requests_view(linked(true), &[], 3));
         assert!(!super::requests::showing(&state));
         assert_eq!(state.sort_mode, WheelSortMode::Group);
-        assert!(!super::requests::view_requests(&mut state), "nothing to show");
         assert!(!super::requests::play_next(&mut state), "nothing to play");
     }
 
@@ -21554,7 +21547,6 @@ mod tests {
             items.iter().map(|item| item.action.clone()).collect::<Vec<_>>(),
             [
                 super::select_music_menu::Action::PlayNextRequest,
-                super::select_music_menu::Action::ViewRequests,
                 super::select_music_menu::Action::ToggleRequests,
             ]
         );
