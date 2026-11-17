@@ -5,7 +5,6 @@ use crate::fonts::machine_font_key;
 use crate::screens::Screen;
 use crate::screens::input as screen_input;
 use crate::screens::pack_sync as shared_pack_sync;
-use crate::screens::select_music;
 use crate::views::{
     OptionsInitView, OptionsPackSyncView, OptionsSongPackView, SimplyLoveUpdaterCapabilities,
     SimplyLoveUpdaterView,
@@ -120,6 +119,7 @@ use update::*;
 mod input;
 use input::*;
 mod render;
+mod search;
 mod text_wrap;
 use render::*;
 
@@ -298,15 +298,25 @@ pub fn handle_raw_key_event(
     state: &mut State,
     key: Option<&RawKeyboardEvent>,
     text: Option<&str>,
+    ctrl_held: bool,
     effects: &mut Vec<ThemeEffect>,
 ) -> bool {
+    // The open setting search owns the keyboard.
+    if state.search.is_open() {
+        let consumed = search::handle_raw_key_event(state, key, text, ctrl_held);
+        append_pending_effects(state, ThemeEffect::None, effects);
+        return consumed;
+    }
     if handle_twitch_channel_key(state, key, text, effects) {
         return true;
     }
     if judgment_palettes::handle_raw_key_event(state, key, text, effects) {
         return true;
     }
-    download_packs::handle_raw_key_event(state, key, text, effects)
+    if download_packs::handle_raw_key_event(state, key, text, effects) {
+        return true;
+    }
+    search::handle_raw_key_event(state, key, text, ctrl_held)
 }
 
 pub fn apply_apply_replaygain_events(

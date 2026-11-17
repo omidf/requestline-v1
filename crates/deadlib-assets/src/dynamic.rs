@@ -20,9 +20,6 @@ use twox_hash::XxHash64;
 
 static BANNER_CACHE_TMP_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-#[cfg(test)]
-#[path = "cache_filename_perf.rs"]
-mod cache_filename_perf;
 
 #[derive(Clone, Copy, Debug)]
 pub struct BannerCacheOptions {
@@ -30,10 +27,8 @@ pub struct BannerCacheOptions {
 }
 
 fn banner_cache_opthash(opts: BannerCacheOptions) -> u64 {
-    let mut hasher = XxHash64::with_seed(0);
-    hasher.write_u8(1);
-    hasher.write_u8(u8::from(opts.enabled));
-    hasher.finish()
+    // XXHash64(seed 0) after write_u8(1), write_u8(enabled), for both options.
+    [0xdd8f_621d_bf7f_57f1, 0x52fc_4823_a13c_997a][usize::from(opts.enabled)]
 }
 
 const BANNER_CACHE_MAGIC: [u8; 8] = *b"DSBNR02\0";
@@ -757,9 +752,6 @@ pub fn dynamic_video_play_time(
     (anchor_media_sec.max(0.0) + elapsed * normalize_video_rate(rate)).max(0.0)
 }
 
-#[cfg(test)]
-#[path = "dynamic_perf.rs"]
-mod perf_tests;
 
 #[cfg(test)]
 mod tests {

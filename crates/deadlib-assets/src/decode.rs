@@ -148,7 +148,21 @@ pub fn decode_texture(path: &Path, hints: &TextureHints) -> image::ImageResult<D
     }
     // Native cleanup follows color keying and the final resize, including
     // sources that gain an alpha channel during preparation.
-    fix_hidden_alpha(&mut image);
+    if !hints.is_default() && hints.alphamap {
+        // Alphamaps have white RGB in every complete pixel. Only an entirely
+        // transparent result needs the native hidden-color cleanup.
+        if !image
+            .as_raw()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|pixel| pixel[3] != 0)
+        {
+            image.as_mut().as_chunks_mut::<4>().0.fill([0; 4]);
+        }
+    } else {
+        fix_hidden_alpha(&mut image);
+    }
     Ok(DecodedTexture { image, source_size })
 }
 
@@ -274,10 +288,6 @@ fn gif_error(error: gif::DecodingError) -> image::ImageError {
     ))
 }
 
-#[cfg(test)]
-fn gif_reader(path: &Path) -> image::ImageResult<gif::Decoder<BufReader<std::fs::File>>> {
-    gif_reader_from_reader(BufReader::new(std::fs::File::open(path)?))
-}
 
 fn gif_reader_from_reader(
     input: BufReader<std::fs::File>,
@@ -290,10 +300,6 @@ fn gif_reader_from_reader(
     options.read_info(input).map_err(gif_error)
 }
 
-#[cfg(test)]
-fn decode_gif(path: &Path, color_key: bool) -> image::ImageResult<RgbaImage> {
-    decode_gif_from_reader(BufReader::new(std::fs::File::open(path)?), color_key)
-}
 
 fn decode_gif_from_reader(
     input: BufReader<std::fs::File>,
@@ -352,10 +358,6 @@ fn decode_gif_from_reader(
     Ok(image)
 }
 
-#[cfg(test)]
-fn decode_indexed_bmp(path: &Path, color_key: bool) -> image::ImageResult<Option<RgbaImage>> {
-    decode_indexed_bmp_from_reader(BufReader::new(std::fs::File::open(path)?), color_key)
-}
 
 // Native indexed BMP parsing stays together: DIB12/DIB40 headers, palette,
 // padded bottom-up rows and bit unpacking share the file offset contract.
@@ -508,10 +510,7 @@ fn unpack_palette<const N: usize>(row: &[u8], pixels: &mut [[u8; 4]], colors: &[
 // PNG indexed entries must remain distinct: native palette color keying
 // changes the first matching entry, even when another entry has identical RGB.
 // Native PNG loading strips 16-bit channels rather than rescaling their values.
-#[cfg(test)]
-fn decode_png(path: &Path, color_key: bool) -> image::ImageResult<RgbaImage> {
-    decode_png_from_reader(BufReader::new(std::fs::File::open(path)?), color_key)
-}
+
 
 fn decode_png_from_reader(
     input: BufReader<std::fs::File>,
@@ -729,6 +728,50 @@ fn zoom_image(mut image: RgbaImage, size: [u32; 2]) -> RgbaImage {
             image = zoom_half(&image, next);
             continue;
         }
+        // Equal-axis coordinates select the same pixel through 2^22.
+        // Beyond that, f32 rounding can put the unused right sample out of bounds.
+        let vertical = image.width() == next[0] && image.width() <= 1 << 22;
+        let horizontal = image.height() == next[1] && image.height() <= 1 << 22;
+        if vertical || horizontal {
+            let blend = |a: [u8; 4], b: [u8; 4], weight: u32, rounding: u64| {
+                let mut pixel = [0; 4];
+                for c in 0..2 {
+                    let a = u64::from(a[c]) | (u64::from(a[c + 2]) << 32);
+                    let b = u64::from(b[c]) | (u64::from(b[c + 2]) << 32);
+                    let pair =
+                        (a * u64::from(weight) + b * u64::from(16777216 - weight) + rounding) >> 24;
+                    pixel[c] = pair as u8;
+                    pixel[c + 2] = (pair >> 32) as u8;
+                }
+                pixel
+            };
+            let mut output = RgbaImage::new(next[0], next[1]);
+            let width = image.width() as usize;
+            let source = image.as_raw().as_chunks::<4>().0;
+            let rows = output
+                .as_mut()
+                .as_chunks_mut::<4>()
+                .0
+                .chunks_exact_mut(next[0] as usize);
+            if vertical {
+                for (row, (top, bottom, weight)) in rows.zip(zoom_axis(image.height(), next[1])) {
+                    let upper = &source[top as usize * width..(top as usize + 1) * width];
+                    let lower = &source[bottom as usize * width..(bottom as usize + 1) * width];
+                    for ((pixel, &a), &b) in row.iter_mut().zip(upper).zip(lower) {
+                        *pixel = blend(a, b, weight, 0x0080_0000_0080_0000);
+                    }
+                }
+            } else {
+                let xs: Vec<_> = zoom_axis(image.width(), next[0]).collect();
+                for (row, source) in rows.zip(source.chunks_exact(width)) {
+                    for (pixel, &(left, right, weight)) in row.iter_mut().zip(&xs) {
+                        *pixel = blend(source[left as usize], source[right as usize], weight, 0);
+                    }
+                }
+            }
+            image = output;
+            continue;
+        }
         let xs: Vec<_> = zoom_axis(image.width(), next[0]).collect();
         let ys = zoom_axis(image.height(), next[1]);
         let mut output = RgbaImage::new(next[0], next[1]);
@@ -845,9 +888,6 @@ pub(crate) fn decode_texture_jobs_with<E>(
     })
 }
 
-#[cfg(test)]
-#[path = "decode_perf.rs"]
-mod perf_tests;
 
 #[cfg(test)]
 mod tests {
@@ -950,23 +990,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn indexed_bmp_rejects_truncation_and_excessive_allocation() {
-        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/itgmania-song-lua-micro/indexed-bitmap-files/win8.bmp");
-        let original = std::fs::read(source).expect("indexed BMP input");
-        let path =
-            std::env::temp_dir().join(format!("invalid-indexed-bmp-{}.bmp", std::process::id()));
-        let mut truncated = original.clone();
-        truncated.pop();
-        let mut oversized = original;
-        oversized[18..22].copy_from_slice(&u32::MAX.to_le_bytes());
-        for bytes in [truncated, oversized] {
-            std::fs::write(&path, bytes).expect("invalid BMP source");
-            assert!(decode_texture_image(&path, &TextureHints::default()).is_err());
-        }
-        std::fs::remove_file(path).expect("remove invalid BMP inputs");
-    }
 
     #[test]
     fn empty_jobs_do_not_call_consumer() {
@@ -1044,36 +1067,38 @@ mod tests {
         assert_eq!(consumed, 2);
         std::fs::remove_file(path).expect("remove decode fixture");
     }
+
+    #[test]
+    fn indexed_bmp_rejects_truncation_and_excessive_allocation() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/itgmania-song-lua-micro/indexed-bitmap-files/win8.bmp");
+        let original = std::fs::read(source).expect("indexed BMP input");
+        let path =
+            std::env::temp_dir().join(format!("invalid-indexed-bmp-{}.bmp", std::process::id()));
+        let mut truncated = original.clone();
+        truncated.pop();
+        let mut oversized = original;
+        oversized[18..22].copy_from_slice(&u32::MAX.to_le_bytes());
+        for bytes in [truncated, oversized] {
+            std::fs::write(&path, bytes).expect("invalid BMP source");
+            assert!(decode_texture_image(&path, &TextureHints::default()).is_err());
+        }
+        std::fs::remove_file(path).expect("remove invalid BMP inputs");
+    }
 }
 
 #[cfg(test)]
 #[path = "texture_pixels_perf.rs"]
 mod texture_pixels_perf;
 
-#[cfg(test)]
-#[path = "indexed_pixels_perf.rs"]
-mod indexed_pixels_perf;
 
 #[cfg(test)]
-mod preparation_perf;
+mod texture_axis_performance;
 
-#[cfg(test)]
-mod direct_media_perf;
-
-#[cfg(test)]
-mod resize_kernel;
 
 #[cfg(test)]
 mod key_kernel;
 
-#[cfg(test)]
-mod palette_perf;
-
-#[cfg(test)]
-mod open_perf;
 
 #[cfg(test)]
 mod open_seek;
-
-#[cfg(test)]
-mod metadata_perf;

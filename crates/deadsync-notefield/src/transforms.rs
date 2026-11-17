@@ -307,15 +307,24 @@ pub fn quantize_centi_i32(value: f64) -> i32 {
     if !value.is_finite() {
         return 0;
     }
-    (value * 100.0).round() as i32
+    let scaled = value * 100.0;
+    if scaled.abs() < 0.5 {
+        return 0;
+    }
+    (scaled + 0.5_f64.copysign(scaled)) as i32
 }
 
 #[must_use]
 pub fn quantize_centi_u32(value: f64) -> u32 {
-    if !value.is_finite() || value <= 0.0 {
+    // Positive, finite, nonzero f64 encodings occupy one unsigned interval.
+    if value.to_bits().wrapping_sub(1) >= f64::INFINITY.to_bits() - 1 {
         return 0;
     }
-    (value * 100.0).round() as u32
+    let scaled = value * 100.0;
+    if scaled < 0.5 {
+        return 0;
+    }
+    (scaled + 0.5) as u32
 }
 
 #[must_use]
@@ -328,7 +337,12 @@ pub const fn clamp_rounded_i16(value: f32) -> i16 {
     if !value.is_finite() {
         return 0;
     }
-    value.round() as i16
+    // The predecessor of 0.5 can round up to 1.0 during a half-unit addition.
+    // Exclude that region before using the cast's truncation and saturation.
+    if value.abs() < 0.5 {
+        return 0;
+    }
+    (value + 0.5_f32.copysign(value)) as i16
 }
 
 pub(crate) fn beat_factor(song_beat: f32, offset: f32, mult: f32) -> f32 {
@@ -1978,6 +1992,9 @@ pub(crate) fn appearance_note_alpha_glow_cached(
     y_offset: f32,
     cache: &NoteAppearanceCache,
 ) -> (f32, f32) {
+    if cache.identity {
+        return (1.0, 0.0);
+    }
     let percent_visible = appearance_note_alpha_cached(y, y_offset, cache);
     (
         appearance_note_actor_alpha_from_alpha(percent_visible),

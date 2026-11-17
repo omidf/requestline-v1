@@ -145,7 +145,6 @@ pub struct GameplayPolicyView {
     pub bpm_position: deadsync_config::theme::GameplayBpmPosition,
     pub machine_font: deadsync_config::theme::MachineFont,
     pub scorebox_pane_filter: deadsync_score::SelectMusicScoreboxFilter,
-    pub smx_profile_enabled: bool,
 }
 
 impl Default for GameplayPolicyView {
@@ -163,7 +162,6 @@ impl Default for GameplayPolicyView {
             bpm_position: config.gameplay_bpm_position,
             machine_font: config.machine_font,
             scorebox_pane_filter: deadsync_score::SelectMusicScoreboxFilter::default(),
-            smx_profile_enabled: false,
         }
     }
 }
@@ -425,6 +423,7 @@ pub struct SelectFlowRuntimeView {
 pub struct PostSongPlayerView {
     pub joined: bool,
     pub guest: bool,
+    pub name_entry_eligible: bool,
     pub display_name: String,
     pub player_initials: String,
     pub avatar_texture_key: Option<String>,
@@ -439,6 +438,7 @@ impl Default for PostSongPlayerView {
         Self {
             joined: false,
             guest: false,
+            name_entry_eligible: false,
             display_name: String::new(),
             player_initials: String::new(),
             avatar_texture_key: None,
@@ -605,7 +605,9 @@ pub struct ScoreboxMachineView {
 pub struct ScoreboxSideView {
     pub joined: bool,
     pub chart_hash: Option<String>,
-    pub groovestats_active: bool,
+    /// Any online leaderboard service (GrooveStats, BoogieStats, or ArrowCloud)
+    /// can serve this side.
+    pub online_active: bool,
     pub show_ex_score: bool,
     pub pane_filter: deadsync_score::SelectMusicScoreboxFilter,
     pub display_name: Arc<str>,
@@ -675,7 +677,6 @@ pub enum MusicWheelSlotRuntimeRequest<'a> {
         song: &'a Arc<deadsync_chart::SongData>,
         chart_hashes: [Option<&'a str>; 2],
         golf_pars: [Option<f64>; 2],
-        lua_submit_allowed: [bool; 2],
         has_edit: bool,
         is_srpg_event: bool,
         is_itl_event: bool,
@@ -730,7 +731,6 @@ pub struct MusicWheelSideRuntimeView {
 pub struct MusicWheelSlotRuntimeView {
     pub golf_pars: [Option<f64>; 2],
     pub sides: [MusicWheelSideRuntimeView; 2],
-    pub lua_submit_allowed: [bool; 2],
     pub has_edit: bool,
     pub is_srpg_event: bool,
     pub sync_pref: deadsync_chart::SyncPref,
@@ -741,7 +741,6 @@ impl Default for MusicWheelSlotRuntimeView {
         Self {
             sides: Default::default(),
             golf_pars: [None; 2],
-            lua_submit_allowed: [false; 2],
             has_edit: false,
             is_srpg_event: false,
             sync_pref: deadsync_chart::SyncPref::Default,
@@ -1408,11 +1407,21 @@ impl Default for SelectMusicPresentationPolicyView {
         Self {
             show_golf_pars: false,
             show_scorebox: deadsync_config::defaults::DEFAULT_SHOW_SELECT_MUSIC_SCOREBOX,
-            scorebox_cycle_enabled:
-                deadsync_config::defaults::DEFAULT_SELECT_MUSIC_SCOREBOX_CYCLE_ITG
-                    || deadsync_config::defaults::DEFAULT_SELECT_MUSIC_SCOREBOX_CYCLE_EX
-                    || deadsync_config::defaults::DEFAULT_SELECT_MUSIC_SCOREBOX_CYCLE_HARD_EX
-                    || deadsync_config::defaults::DEFAULT_SELECT_MUSIC_SCOREBOX_CYCLE_TOURNAMENTS,
+            scorebox_cycle_enabled: deadsync_score::select_music_scorebox_filter_has_any(
+                deadsync_score::SelectMusicScoreboxFilter {
+                    groovestats_itg: deadsync_config::defaults::DEFAULT_GROOVESTATS_SCOREBOX_ITG,
+                    groovestats_ex: deadsync_config::defaults::DEFAULT_GROOVESTATS_SCOREBOX_EX,
+                    groovestats_events:
+                        deadsync_config::defaults::DEFAULT_GROOVESTATS_SCOREBOX_EVENTS,
+                    arrowcloud_regular: deadsync_config::options::arrowcloud_regular_boards_shown(
+                        None,
+                        deadsync_config::defaults::DEFAULT_ENABLE_GROOVESTATS,
+                    ),
+                    arrowcloud_events: deadsync_config::defaults::DEFAULT_ARROWCLOUD_EVENT_BOARDS,
+                    golf: false,
+                    events_first: true,
+                },
+            ),
             scorebox_in_step_pane: false,
             show_stage_display: deadsync_config::defaults::DEFAULT_SHOW_SELECT_MUSIC_STAGE_DISPLAY,
             show_gameplay_timer:

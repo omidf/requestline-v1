@@ -53,6 +53,28 @@ the shell executes. The screen never touches the network, the disk or the song
 cache itself. Anything it needs from them arrives through `Services` or one of
 the calls above.
 
+**Keys.** The screen answers to DeadSync's buttons, as the keymap defines them,
+through `handle_input`. The keyboard reaches it directly in two calls:
+
+- `handle_raw_key_event` sees each key before the keymap does. It takes a key
+  only inside a text box: the SEARCH box with the cursor in its results, or the
+  rip prompt. Even there, keys bound to START, BACK or a dedicated menu button
+  stay buttons. Enter, Escape, Backspace, PageUp and PageDown do something of
+  their own only when nothing is bound to them.
+- `handle_text` gets typed characters along with the key that typed them. A
+  key bound to a button never types and never starts a search. The press that
+  moved the cursor into a box is not typed into it either. The two events can
+  arrive in either order, and a stalled frame can deliver a tap's release
+  before its character, so each press is paired with its character
+  (`KeyPress`). The character is then judged by what its press did.
+
+With Menu Buttons set to Only Dedicated Buttons and Menu Navigation set to
+Three Key Menu, `press_three_key` handles MenuLeft and MenuRight. They step
+through whatever has the cursor: lists and grids in reading order, strips that
+carry on into what is under them, and dialogs as a ring of choices. START goes
+in. MenuLeft and MenuRight together are BACK; the chord first puts back the
+step its first button took (`NavMark`). The footer switches to match.
+
 ---
 
 ## External services
@@ -99,8 +121,10 @@ refused before anything is downloaded.
 its sync (`sync_dialog.rs`), which offers:
 
 - **Measure with Null-or-Die.** The shell gathers the pack's songs and opens
-  the shared pack sync review on one chart per song, of the current play style.
-  The reader saves what they accept.
+  the shared pack sync review on one chart per song, preferring the current
+  play style and difficulty. Songs with only other styles, including doubles
+  and pump, use an available chart with note data. The reader saves what they
+  accept.
 - **Shift ITG to NULL.** Every simfile's offsets move by
   `ITG_SYNC_OFFSET_SECONDS`. A pack already recorded as NULL is offered the
   reverse instead, NULL to ITG, recorded as ITG.

@@ -139,6 +139,7 @@ where
     }
 
     pub fn finish_gameplay_if_ready(&mut self, trace_enabled: bool) -> Option<GameplayAction> {
+        if self.control.paused { return None; }
         let now = self.total_elapsed_in_screen();
         for player in 0..self.setup.num_players.min(MAX_PLAYERS) {
             if !self.profiles_runtime.profiles[player].golf_scoring_enabled() { continue; }
@@ -263,11 +264,20 @@ where
             phase_timings.pre_notes_us = elapsed_us_since(started);
         }
 
+        if self.control.paused {
+            // Native Player still updates its actor children, but skips note
+            // judgments and hold/roll decay. Physical held state remains live.
+            process_input_edges(self, trace_enabled, &mut phase_timings, song_clock);
+            self.finalize_update_trace(delta_time, music_time_sec, frame_trace_started, phase_timings);
+            return GameplayAction::None;
+        }
+
         let autoplay_started = if trace_enabled {
             Some(Instant::now())
         } else {
             None
         };
+        let previous_roll_notes = self.autoplay_roll_frame_notes();
         self.run_autoplay_or_replay_frame(music_time_ns);
         if let Some(started) = autoplay_started {
             phase_timings.autoplay_us = elapsed_us_since(started);
@@ -288,6 +298,7 @@ where
 
         self.run_post_input_gameplay_phases(
             previous_music_time_ns,
+            &previous_roll_notes,
             music_time_ns,
             music_time_sec,
             delta_time,
@@ -331,6 +342,17 @@ where
             phase_timings,
         );
         GameplayAction::None
+    }
+
+    pub fn set_gameplay_paused(&mut self, paused: bool) {
+        if self.control.paused == paused || (paused && self.mods.attacks.cleared_for_outro) {
+            return;
+        }
+        self.control.paused = paused;
+        self.control.exit_input.hold_to_exit_key = None;
+        self.control.exit_input.hold_to_exit_start = None;
+        self.control.exit_input.hold_to_exit_aborted_at = None;
+        self.push_audio_command(GameplayAudioCommand::PauseMusic(paused));
     }
 
     #[inline(always)]
@@ -1143,6 +1165,9 @@ where
         if player_idx >= self.setup.num_players {
             return AccelEffects::default();
         }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_attack_accel_effects(false, profile_mask_bits, options.accel);
+        }
         effective_attack_accel_effects(
             self.player_attack_base_cleared(player_idx),
             profile_mask_bits,
@@ -1159,6 +1184,9 @@ where
         if player_idx >= self.setup.num_players {
             return VisualEffects::default();
         }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_attack_visual_effects(false, profile_mask_bits, options.visual);
+        }
         effective_attack_visual_effects(
             self.player_attack_base_cleared(player_idx),
             profile_mask_bits,
@@ -1171,6 +1199,9 @@ where
         if player_idx >= self.setup.num_players {
             return AppearanceEffects::default();
         }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return options.appearance;
+        }
         self.mods.attacks.appearance[player_idx]
     }
 
@@ -1178,6 +1209,9 @@ where
     pub fn effective_visibility_effects_for_player(&self, player_idx: usize) -> VisibilityEffects {
         if player_idx >= self.setup.num_players {
             return VisibilityEffects::default();
+        }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_attack_visibility_effects(options.visibility);
         }
         effective_attack_visibility_effects(self.mods.attacks.visibility[player_idx])
     }
@@ -1199,6 +1233,9 @@ where
         if player_idx >= self.setup.num_players {
             return ScrollEffects::default();
         }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_attack_scroll_effects(false, base_scroll, options.scroll);
+        }
         effective_attack_scroll_effects(
             self.player_attack_base_cleared(player_idx),
             base_scroll,
@@ -1214,6 +1251,9 @@ where
     ) -> PerspectiveEffects {
         if player_idx >= self.setup.num_players {
             return PerspectiveEffects::default();
+        }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_attack_perspective_effects(false, base_perspective, options.perspective);
         }
         effective_attack_perspective_effects(
             self.player_attack_base_cleared(player_idx),
@@ -1231,6 +1271,9 @@ where
         if player_idx >= self.setup.num_players {
             return 0.0;
         }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return effective_mini_percent(options.mini_percent, base_mini_percent, false);
+        }
         effective_mini_percent(
             self.mods.attacks.mini_percent[player_idx],
             base_mini_percent,
@@ -1246,6 +1289,9 @@ where
     ) -> ScrollSpeedSetting {
         if player_idx >= self.setup.num_players {
             return ScrollSpeedSetting::default();
+        }
+        if let Some(options) = &self.mods.song_lua_player_options[player_idx] {
+            return options.scroll_speed.unwrap_or(base_scroll_speed);
         }
         effective_attack_scroll_speed(
             self.player_attack_base_cleared(player_idx),
@@ -1813,26 +1859,41 @@ where
         ))
     }
 
-    /// The Routine score both participants earn together, including both
-    /// participants' earlier course songs and full-course totals.
+    /// Routine's own scorekeeper, plus retained course carry from both parts.
     pub fn routine_shared_itg_score_inputs(&self) -> Option<ItgScoreInputs> {
-        if !self.setup.session.play_style.is_routine() {
-            return None;
-        }
+        let routine = self.players_runtime.routine.as_ref()?;
+        let stage = itg_score_inputs_from_display(
+            routine.score_stage(),
+            CourseDisplayCarry::default(),
+            CourseDisplayTotals::default(),
+        );
+        let carry = std::array::from_fn::<_, MAX_PLAYERS, _>(|player| {
+            itg_score_inputs_from_display(
+                ItgScoreStage::default(),
+                self.display_carry_for_player(player),
+                self.display_totals_for_player(player),
+            )
+        });
         Some(shared_itg_score_inputs(
-            self.participant_display_itg_score_inputs(0)?,
-            self.participant_display_itg_score_inputs(1)?,
+            stage,
+            shared_itg_score_inputs(carry[0], carry[1]),
         ))
     }
 
-    /// The Routine score both participants earn in the current song only.
+    /// Current-song team state is independent of the participants' failed flags.
     pub fn routine_shared_stage_itg_score_inputs(&self) -> Option<ItgScoreInputs> {
-        if !self.setup.session.play_style.is_routine() {
-            return None;
-        }
-        Some(shared_itg_score_inputs(
-            self.stage_itg_score_inputs(0)?,
-            self.stage_itg_score_inputs(1)?,
+        let routine = self.players_runtime.routine.as_ref()?;
+        let possible_grade_points = self
+            .stage_totals_for_player(0)
+            .possible_grade_points
+            .saturating_add(self.stage_totals_for_player(1).possible_grade_points);
+        Some(itg_score_inputs_from_display(
+            routine.score_stage(),
+            CourseDisplayCarry::default(),
+            CourseDisplayTotals {
+                possible_grade_points,
+                ..CourseDisplayTotals::default()
+            },
         ))
     }
 
@@ -2088,6 +2149,9 @@ where
             self.setup.num_players,
             judge_start_ns,
         );
+        if let Some(routine) = self.players_runtime.routine.as_mut() {
+            *routine = RoutineStageStats::default();
+        }
         for player in 0..self.setup.num_players {
             reset_player_runtime_for_practice(
                 &mut self.players_runtime.players[player],
@@ -2650,6 +2714,13 @@ where
     #[inline(always)]
     pub const fn exit_transition_active(&self) -> bool {
         self.control.exit_input.exit_transition.is_some()
+    }
+
+    pub fn should_finalize_stage_result(&self) -> bool {
+        // ScreenGameplay::StageFinished cancels a backed-out stage before
+        // finalizing scores, even when every player had already failed.
+        !self.progress.stage.cancelled
+            && (self.song_completed_naturally() || self.all_joined_players_failed())
     }
 
     #[inline(always)]
@@ -3330,6 +3401,11 @@ where
     pub fn begin_exit_transition(&mut self, kind: ExitTransitionKind) -> bool {
         if !self.control.exit_input.begin_exit(kind, Instant::now()) {
             return false;
+        }
+        if kind == ExitTransitionKind::Cancel {
+            // The animation state is cleared before navigation reaches the
+            // shell; retain cancellation as part of the stage outcome.
+            self.progress.stage.cancelled = true;
         }
         self.push_audio_command(GameplayAudioCommand::StopMusic);
         true

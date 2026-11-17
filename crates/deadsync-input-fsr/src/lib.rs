@@ -30,13 +30,31 @@ mod smx;
     target_os = "freebsd",
     target_os = "macos"
 ))]
+mod snek;
+
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
+mod teejusb;
+
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 pub struct Monitor {
     fsrio: fsrio::Monitor,
     smx: smx::Monitor,
+    teejusb: teejusb::Monitor,
     /// Fake SMX pads for UI development (`DEADSYNC_MOCK_PADS`). When set, the
     /// mock owns the SMX backend slot: native SMX never starts (no pads, no
     /// USB writes) and SMX-routed calls land here instead.
     mock: Option<mock::Monitor>,
+    snek: snek::Monitor,
 }
 
 #[cfg(any(
@@ -51,19 +69,65 @@ impl Default for Monitor {
     }
 }
 
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "macos"
+))]
 impl Monitor {
     #[must_use]
     pub fn new() -> Self {
         Self {
             fsrio: fsrio::Monitor::new(),
             smx: smx::Monitor::new(),
+            teejusb: teejusb::Monitor::default(),
             mock: mock::Monitor::from_env(),
+            snek: snek::Monitor::default(),
         }
+    }
+
+    #[must_use]
+    pub fn with_data_dir(path: &Path) -> Self {
+        Self {
+            teejusb: teejusb::Monitor::with_data_dir(path),
+            ..Self::new()
+        }
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        // UI mocks must never start native serial probing.
+        self.teejusb.set_enabled(enabled && self.mock.is_none());
+    }
+
+    /// Enter or leave Snekboard's config-endpoint sensor test mode.
+    ///
+    /// This is intentionally independent of the FSR feature switch: Snek's
+    /// four switches per panel are binary diagnostics, not pressure sensors.
+    pub fn set_snek_test_active(&mut self, active: bool) {
+        self.snek.set_active(active);
+    }
+
+    /// Latest complete Snek sensor snapshot. Reading it never performs USB I/O.
+    #[must_use]
+    pub fn snek_sensor_snapshot(&self) -> SnekSensorSnapshot {
+        self.snek.snapshot()
+    }
+
+    /// Stop Snek diagnostics and send the config-endpoint disconnect command.
+    /// Call only during application shutdown; ordinary Test Input exit merely
+    /// selects sensor zero and keeps the config endpoint connected.
+    pub fn shutdown_snek(&mut self) {
+        self.snek.shutdown();
     }
 
     pub fn write_debug_dump(&mut self, path: &Path) -> Result<(), String> {
         let mut out = String::new();
         out.push_str(&self.fsrio.debug_dump());
+        out.push_str("\n\n");
+        out.push_str(&self.teejusb.debug_dump());
+        out.push_str("\n\n");
+        out.push_str(&deadsync_reflex::debug_dump());
         out.push_str("\n\n");
         match &mut self.mock {
             Some(m) => out.push_str(&m.debug_dump()),
@@ -84,6 +148,10 @@ impl Monitor {
     pub fn poll_pads_into(&mut self, pads: &mut Vec<PadView>) {
         pads.clear();
         self.fsrio.poll_pads_into(pads);
+        self.teejusb.poll_pads_into(pads);
+        if self.mock.is_none() {
+            deadsync_reflex::poll_pads_into(pads);
+        }
         match &mut self.mock {
             Some(m) => m.poll_pads_into(pads),
             None => self.smx.poll_pads_into(pads),
@@ -102,7 +170,9 @@ impl Monitor {
         value: u16,
     ) -> bool {
         match device.backend {
+            BackendKind::Reflex => deadsync_reflex::set_threshold(device, button, sensor, value),
             BackendKind::Fsrio => self.fsrio.set_threshold(device, button, sensor, value),
+            BackendKind::Teejusb => self.teejusb.set_threshold(device, button, sensor, value),
             BackendKind::Smx => match &mut self.mock {
                 Some(m) => m.set_threshold(device, button, sensor, value),
                 None => self.smx.set_threshold(device, button, sensor, value),
@@ -121,7 +191,7 @@ impl Monitor {
         release: u16,
     ) -> bool {
         match device.backend {
-            BackendKind::Fsrio => false,
+            BackendKind::Fsrio | BackendKind::Teejusb | BackendKind::Reflex => false,
             BackendKind::Smx => match &mut self.mock {
                 Some(m) => m.set_threshold_pair(device, button, press, release),
                 None => self.smx.set_threshold_pair(device, button, press, release),
@@ -138,6 +208,10 @@ impl Monitor {
         enabled: bool,
     ) -> bool {
         match device.backend {
+            BackendKind::Teejusb => false,
+            BackendKind::Reflex => {
+                deadsync_reflex::set_sensor_enabled(device, button, sensor, enabled)
+            }
             BackendKind::Fsrio => self
                 .fsrio
                 .set_sensor_enabled(device, button, sensor, enabled),
@@ -151,6 +225,7 @@ impl Monitor {
     /// Turn auto-recalibration on/off for a whole pad (Extra Advanced).
     pub fn set_auto_recalibration(&mut self, device: PadDeviceId, enabled: bool) -> bool {
         match device.backend {
+            BackendKind::Teejusb | BackendKind::Reflex => false,
             BackendKind::Fsrio => self.fsrio.set_auto_recalibration(device, enabled),
             BackendKind::Smx => match &mut self.mock {
                 Some(m) => m.set_auto_recalibration(device, enabled),
@@ -162,6 +237,7 @@ impl Monitor {
     /// Set the per-panel debounce (microseconds) for a whole pad (Extra Advanced).
     pub fn set_debounce_micros(&mut self, device: PadDeviceId, micros: u16) -> bool {
         match device.backend {
+            BackendKind::Teejusb | BackendKind::Reflex => false,
             BackendKind::Fsrio => self.fsrio.set_debounce_micros(device, micros),
             BackendKind::Smx => match &mut self.mock {
                 Some(m) => m.set_debounce_micros(device, micros),
@@ -174,6 +250,9 @@ impl Monitor {
     /// while the config screen is open and `false` when leaving it.
     pub fn set_active(&mut self, active: bool) {
         self.fsrio.set_active(active);
+        if self.mock.is_none() {
+            self.teejusb.set_active(active);
+        }
         match &mut self.mock {
             Some(m) => m.set_active(active),
             None => self.smx.set_active(active),
@@ -185,9 +264,11 @@ impl Monitor {
         self.fsrio.poll_pending_saves();
     }
 
-    /// Persist pending FSRio edits before a clean shutdown.
+    /// Flush pending board/computer settings before a clean shutdown. The serial
+    /// worker completes its flush when joined during teardown.
     pub fn flush_pending_saves(&mut self) {
         self.fsrio.flush_pending_saves();
+        self.teejusb.flush_pending_saves();
     }
 }
 
@@ -198,7 +279,7 @@ impl Monitor {
     target_os = "macos"
 )))]
 mod unsupported {
-    use super::{PadDeviceId, PadView};
+    use super::{PadDeviceId, PadView, SnekSensorSnapshot};
     use std::fmt::Write as _;
     use std::path::Path;
     use std::time::SystemTime;
@@ -210,6 +291,14 @@ mod unsupported {
         pub const fn new() -> Self {
             Self
         }
+
+        pub fn with_data_dir(_path: &Path) -> Self {
+            Self
+        }
+
+        pub fn set_enabled(&mut self, _enabled: bool) {}
+
+        pub fn poll_pads_into(&mut self, _pads: &mut Vec<PadView>) {}
 
         pub fn poll_pads(&mut self) -> Vec<PadView> {
             Vec::new()
@@ -255,6 +344,14 @@ mod unsupported {
 
         pub fn set_active(&mut self, _active: bool) {}
 
+        pub fn set_snek_test_active(&mut self, _active: bool) {}
+
+        pub const fn snek_sensor_snapshot(&self) -> SnekSensorSnapshot {
+            SnekSensorSnapshot::unavailable()
+        }
+
+        pub fn shutdown_snek(&mut self) {}
+
         pub fn poll_pending_saves(&mut self) {}
 
         pub fn flush_pending_saves(&mut self) {}
@@ -280,6 +377,35 @@ mod unsupported {
     target_os = "macos"
 )))]
 pub use unsupported::Monitor;
+
+/// Panel order used by [`SnekSensorSnapshot::sensors`].
+pub const SNEK_PANEL_UP: usize = 0;
+pub const SNEK_PANEL_DOWN: usize = 1;
+pub const SNEK_PANEL_LEFT: usize = 2;
+pub const SNEK_PANEL_RIGHT: usize = 3;
+
+/// A lock-free-from-the-caller's-perspective copy of Snek's diagnostic state.
+/// Dimensions are `[player][panel][sensor]`, with sensors ordered top, bottom,
+/// left, right. `revision` changes whenever connection or sensor state changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SnekSensorSnapshot {
+    pub connected: bool,
+    pub read_error: bool,
+    pub sensors: [[[bool; 4]; 4]; 2],
+    pub revision: u64,
+}
+
+impl SnekSensorSnapshot {
+    #[must_use]
+    pub const fn unavailable() -> Self {
+        Self {
+            connected: false,
+            read_error: false,
+            sensors: [[[false; 4]; 4]; 2],
+            revision: 0,
+        }
+    }
+}
 
 fn write_dump_file(path: &Path, content: String) -> Result<(), String> {
     if let Some(parent) = path.parent() {

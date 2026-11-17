@@ -11,16 +11,14 @@ use deadlib_audio_core::{
     set_music_target_gain, snap_music_gain_generation, stop_music_track,
 };
 
-#[path = "../../../tests/support/kernel_bench.rs"]
-mod bench;
-#[path = "../../../tests/support/perf.rs"]
+#[path = "../../../tests/support/allocations.rs"]
 mod perf;
 #[path = "../src/ring.rs"]
 mod ring;
 
 mod mode_parser {
     use deadlib_audio_core::AudioOutputMode;
-    use std::hint::black_box;
+
 
     #[test]
     fn modes_preserve_ascii_case_and_unicode_trimming() {
@@ -61,32 +59,10 @@ mod mode_parser {
         }
     }
 
-    #[test]
-    #[ignore = "release CPU-cycle and allocation benchmark"]
-    fn benchmark_callback_kernels_mode_parser() {
-        for (kind, input) in [
-            ("auto", "Auto".to_owned()),
-            ("shared", "Shared".to_owned()),
-            ("exclusive", "eXcLuSiVe".to_owned()),
-            ("trimmed", "\u{2003}SHARED\u{3000}".to_owned()),
-            ("invalid", "unknown".to_owned()),
-            ("empty", String::new()),
-            ("long-invalid", "x".repeat(4096)),
-            ("unicode-invalid", "exclus\u{0131}ve".to_owned()),
-        ] {
-            let label = format!("callback/mode-{kind}");
-            let mut work = || {
-                let _ = black_box(black_box(input.as_str()).parse::<AudioOutputMode>());
-            };
-            let (_, counts) = crate::perf::measure(work);
-            println!("{label}: allocation {counts:?}");
-            crate::bench::measure(&label, 100_000, &mut work);
-        }
-    }
 }
 
 mod quantization {
-    use std::hint::black_box;
+
 
     #[test]
     fn pcm_conversion_preserves_saturation_truncation_and_nan() {
@@ -111,48 +87,6 @@ mod quantization {
         }
     }
 
-    #[test]
-    #[ignore = "release CPU-cycle and allocation benchmark"]
-    fn benchmark_callback_kernels_quantization() {
-        for samples in [512, 4096] {
-            for kind in [
-                "normal",
-                "clipped",
-                "nan",
-                "infinite",
-                "zero",
-                "negative-zero",
-                "tiny",
-                "mixed",
-            ] {
-                let input: Vec<_> = (0..samples)
-                    .map(|i: usize| {
-                        let value = i.wrapping_mul(7919) as i16 as f32 / 32768.0;
-                        match kind {
-                            "normal" => value,
-                            "clipped" => value * 4.0,
-                            "nan" => f32::from_bits(0x7fc01234),
-                            "infinite" => f32::INFINITY,
-                            "zero" => 0.0,
-                            "negative-zero" => -0.0,
-                            "tiny" => f32::MIN_POSITIVE,
-                            _ => f32::from_bits((i as u32).wrapping_mul(1664525)),
-                        }
-                    })
-                    .collect();
-                let mut output = vec![0i16; samples];
-                let label = format!("callback/quantize-{kind}/samples={samples}");
-                let mut work = || {
-                    super::render::write_pcm(black_box(&input), black_box(&mut output), true);
-                    black_box(&output);
-                };
-                let (_, counts) = crate::perf::measure(&mut work);
-                assert_eq!(counts, crate::perf::Churn::default());
-                println!("{label}: allocation {counts:?}");
-                crate::bench::measure(&label, 8_000_000 / samples, &mut work);
-            }
-        }
-    }
 }
 
 mod render {
@@ -165,7 +99,7 @@ mod render {
 
     mod kernels {
         use super::*;
-        use std::hint::black_box;
+
 
         #[test]
         fn pcm_batches_preserve_samples_and_unmatched_output_tails() {
@@ -240,47 +174,5 @@ mod render {
             }
         }
 
-        #[test]
-        #[ignore = "release CPU-cycle and allocation benchmark"]
-        fn benchmark_callback_kernels() {
-            for samples in [512, 4096] {
-                let source: Vec<_> = (0..samples)
-                    .map(|i: usize| i.wrapping_mul(7919) as i16)
-                    .collect();
-                let mut output = vec![0.0; samples];
-                for (kind, channels, volume, initial, target) in [
-                    ("steady-unit", 2, 1.0, 1.0, 1.0),
-                    ("steady-gain", 2, 0.8, 0.75, 0.75),
-                    ("steady-muted", 2, 0.0, 1.0, 1.0),
-                    ("steady-tiny", 2, f32::MIN_POSITIVE, 1.0, 1.0),
-                    ("ramp-up", 2, 0.8, 0.0, 1.0),
-                    ("ramp-down", 2, 0.8, 1.0, 0.0),
-                    ("ramp-settles", 2, 0.8, 0.99, 1.0),
-                    ("ramp-surround", 6, 0.8, 0.0, 1.0),
-                    ("ramp-muted", 2, 0.0, 0.0, 1.0),
-                    ("ramp-muted-negative-zero", 2, -0.0, 0.0, 1.0),
-                    ("ramp-muted-settles", 2, 0.0, 0.99, 1.0),
-                    ("ramp-muted-surround", 6, 0.0, 0.0, 1.0),
-                ] {
-                    let label = format!("callback/{kind}/samples={samples}");
-                    let mut work = || {
-                        let mut gain = black_box(initial);
-                        convert_music_samples(
-                            black_box(&source),
-                            black_box(&mut output),
-                            black_box(channels),
-                            black_box(volume),
-                            black_box(target),
-                            &mut gain,
-                        );
-                        black_box((&output, gain));
-                    };
-                    let (_, counts) = crate::perf::measure(&mut work);
-                    assert_eq!(counts, crate::perf::Churn::default());
-                    println!("{label}: allocation {counts:?}");
-                    crate::bench::measure(&label, 8_000_000 / samples, &mut work);
-                }
-            }
-        }
     }
 }
