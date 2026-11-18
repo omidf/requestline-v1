@@ -5254,8 +5254,9 @@ fn build_select_music_menu(state: &State) -> select_music_menu::MenuLists {
     let p2_joined = state.session.side_joined(profile_data::PlayerSide::P2);
     let single_player_joined = p1_joined ^ p2_joined;
 
-    let mut standalone = Vec::with_capacity(8);
+    let mut standalone = Vec::with_capacity(10);
     standalone.push(select_music_menu::ITEM_GO_BACK);
+    standalone.extend(requests::highlighted_items(state));
     if state.policy.profile_switch {
         standalone.push(select_music_menu::ITEM_SWITCH_PROFILE);
     }
@@ -10059,6 +10060,20 @@ fn dispatch_menu_action(
             if let Some(open) = requests::toggled_open(state) {
                 queue_online(state, crate::SimplyLoveOnlineRequest::SetRequestlineOpen(open));
             }
+            ThemeEffect::None
+        }
+        select_music_menu::Action::SkipRequest => {
+            if let Some((id, to)) = requests::skip_highlighted(state) {
+                queue_online(state, crate::SimplyLoveOnlineRequest::MoveRequest { id, to });
+            }
+            hide_select_music_menu(state);
+            ThemeEffect::None
+        }
+        select_music_menu::Action::CancelRequest => {
+            if let Some(id) = requests::cancel_highlighted(state) {
+                queue_online(state, crate::SimplyLoveOnlineRequest::RemoveRequest(id));
+            }
+            hide_select_music_menu(state);
             ThemeEffect::None
         }
         select_music_menu::Action::RequestlineStatus => ThemeEffect::None,
@@ -21514,11 +21529,86 @@ mod tests {
         assert!(super::requests::showing(&state));
         assert_eq!(wheel_titles(&state.all_entries), ["[Requests 1]", "Gamma"]);
 
-        // Nothing left: back to the library rather than an empty wheel.
+        // Nothing left: back to the library on the wheel's usual sort,
+        // rather than an empty wheel.
+        state.policy.interaction.initial_sort = deadsync_config::theme::SelectMusicSort::Title;
         super::requests::apply_view(&mut state, requests_view(linked(true), &[], 3));
         assert!(!super::requests::showing(&state));
-        assert_eq!(state.sort_mode, WheelSortMode::Group);
+        assert_eq!(state.sort_mode, WheelSortMode::Title);
         assert!(!super::requests::play_next(&mut state), "nothing to play");
+    }
+
+    fn selected_title(state: &super::State) -> Option<String> {
+        super::selected_song_arc(state).map(|song| song.title.clone())
+    }
+
+    fn select_title(state: &mut super::State, title: &str) {
+        let song = state
+            .entries
+            .iter()
+            .find_map(|entry| match entry {
+                super::MusicWheelEntry::Song(song) if song.title == title => Some(Arc::clone(song)),
+                _ => None,
+            })
+            .unwrap();
+        super::focus_song_from_search(state, &song);
+    }
+
+    fn menu_actions(state: &super::State) -> Vec<super::select_music_menu::Action> {
+        super::requests::highlighted_items(state)
+            .into_iter()
+            .map(|item| item.action)
+            .collect()
+    }
+
+    #[test]
+    fn the_highlighted_request_can_be_skipped_or_cancelled() {
+        use super::select_music_menu::Action;
+        let mut state = requests_state();
+        let (r1, r2, r3) = (
+            ("r1", "Pack A/Song A1", "Alpha"),
+            ("r2", "Pack B/Song B1", "Gamma"),
+            ("r3", "Pack A/Song A2", "Beta"),
+        );
+        assert!(menu_actions(&state).is_empty(), "nothing highlighted");
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r1, r2, r3], 1));
+        assert!(menu_actions(&state).is_empty(), "not on the Requests view");
+        assert!(super::requests::play_next(&mut state));
+        assert_eq!(menu_actions(&state), [Action::SkipRequest, Action::CancelRequest]);
+
+        // Skip moves it two places down; the wheel lands on the next one.
+        assert_eq!(super::requests::skip_highlighted(&mut state), Some(("r1".to_owned(), 2)));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r2, r3, r1], 2));
+        assert_eq!(wheel_titles(&state.all_entries), ["[Requests 3]", "Gamma", "Beta", "Alpha"]);
+        assert_eq!(selected_title(&state).as_deref(), Some("Gamma"));
+
+        // Cancel takes it off; the wheel lands on the one after it.
+        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r2"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r3, r1], 3));
+        assert_eq!(selected_title(&state).as_deref(), Some("Beta"));
+
+        // The last request can't move further down, only be cancelled; the
+        // wheel then lands on the one before it.
+        select_title(&mut state, "Alpha");
+        assert_eq!(menu_actions(&state), [Action::CancelRequest]);
+        assert_eq!(super::requests::skip_highlighted(&mut state), None);
+        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r1"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r3], 4));
+        assert_eq!(selected_title(&state).as_deref(), Some("Beta"));
+
+        // Cancelling the last one leaves the Requests view.
+        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r3"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[], 5));
+        assert!(!super::requests::showing(&state));
+
+        // Not connected: nothing to offer.
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r1], 6));
+        assert!(super::requests::play_next(&mut state));
+        super::requests::apply_view(
+            &mut state,
+            requests_view(deadsync_online::requestline::Status::Unreachable, &[r1], 6),
+        );
+        assert!(menu_actions(&state).is_empty());
     }
 
     #[test]

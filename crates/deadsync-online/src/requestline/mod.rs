@@ -22,7 +22,9 @@ mod connection;
 mod library;
 mod protocol;
 
-use connection::{Command, Env, Handle, LocalLibrary, Target, TargetError, Timing, Uploader};
+use connection::{
+    Command, Env, Handle, LocalLibrary, QueueAction, Target, TargetError, Timing, Uploader,
+};
 use deadsync_config::requestline::RequestlineSide;
 use deadsync_net as network;
 use deadsync_profile::{PlayerSide, compat as profile};
@@ -417,9 +419,9 @@ pub fn on_settings_changed() {
     let _ = ensure_running();
 }
 
-/// The in-game requests switch: open or close the page's requests. Does
-/// nothing unless linked; the new state arrives in the server's reply.
-pub fn set_requests_open(open: bool) {
+/// Send a queue change. Does nothing unless linked; the new queue arrives
+/// in the server's reply.
+fn send_queue_action(action: QueueAction) {
     if !matches!(status(), Status::Linked { .. }) {
         return;
     }
@@ -430,7 +432,22 @@ pub fn set_requests_open(open: bool) {
     else {
         return;
     };
-    let _ = tx.send(Command::SetOpen { open });
+    let _ = tx.send(Command::Queue(action));
+}
+
+/// The in-game requests switch: open or close the page's requests.
+pub fn set_requests_open(open: bool) {
+    send_queue_action(QueueAction::SetOpen(open));
+}
+
+/// Take a request off the queue without playing it.
+pub fn remove_request(id: String) {
+    send_queue_action(QueueAction::Remove { id });
+}
+
+/// Move a request to a place in the queue (0 is next).
+pub fn move_request(id: String, to: usize) {
+    send_queue_action(QueueAction::Move { id, to });
 }
 
 /// A song started (not a restart): its first request leaves the queue.

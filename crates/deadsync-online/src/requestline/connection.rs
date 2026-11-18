@@ -28,12 +28,29 @@ pub(super) enum Command {
         song_id: String,
         at: Instant,
     },
-    /// Open or close requests. Sent only while connected; never held for
-    /// later, so a switch pressed offline can't fire minutes afterwards.
-    SetOpen {
-        open: bool,
-    },
+    /// The streamer runs the queue from the game: open or close requests,
+    /// skip or cancel one. Sent only while connected; never held for later,
+    /// so a press made offline can't fire minutes afterwards.
+    Queue(QueueAction),
     Shutdown,
+}
+
+/// What the streamer can do to the queue from the game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum QueueAction {
+    SetOpen(bool),
+    Remove { id: String },
+    Move { id: String, to: usize },
+}
+
+impl QueueAction {
+    fn message(self) -> Outgoing {
+        match self {
+            Self::SetOpen(open) => Outgoing::SetOpen { open },
+            Self::Remove { id } => Outgoing::Remove { id },
+            Self::Move { id, to } => Outgoing::Move { id, to },
+        }
+    }
 }
 
 /// Where to connect: the ticket call's answer, turned into a URL.
@@ -320,8 +337,8 @@ fn keep_offline(command: Command, session: &mut Session) {
         Command::Ended { song_id, at } => {
             session.pending_end = Some(PendingEnd { song_id, at });
         }
-        Command::SetOpen { open } => {
-            debug!("requestline: not connected, dropped set-open {open}");
+        Command::Queue(action) => {
+            debug!("requestline: not connected, dropped {action:?}");
         }
         Command::SyncLibrary | Command::Shutdown => {}
     }
@@ -658,11 +675,12 @@ impl<E: Env> Live<'_, E> {
                     self.deliver_pending_end()?;
                 }
             }
-            Command::SetOpen { open } => {
+            Command::Queue(action) => {
                 if self.said_hello {
-                    self.send(&Outgoing::SetOpen { open })?;
+                    info!("requestline: {action:?}");
+                    self.send(&action.message())?;
                 } else {
-                    debug!("requestline: not linked yet, dropped set-open {open}");
+                    debug!("requestline: not linked yet, dropped {action:?}");
                 }
             }
             Command::Shutdown => {}
@@ -1067,7 +1085,7 @@ mod tests {
     }
 
     #[test]
-    fn set_open_is_sent_once_linked() {
+    fn queue_actions_are_sent_once_linked() {
         let (server, url) = Server::new();
         let (handle, status, _puts) = start(url, None);
         let mut socket = server.accept();
@@ -1081,14 +1099,30 @@ mod tests {
                 requests_open: true,
             },
         );
-        handle.tx.send(Command::SetOpen { open: false }).unwrap();
-        loop {
+        handle.tx.send(Command::Queue(QueueAction::SetOpen(false))).unwrap();
+        handle
+            .tx
+            .send(Command::Queue(QueueAction::Remove { id: "r1".into() }))
+            .unwrap();
+        handle
+            .tx
+            .send(Command::Queue(QueueAction::Move { id: "r2".into(), to: 2 }))
+            .unwrap();
+        let mut sent = Vec::new();
+        while sent.len() < 3 {
             let message = recv_json(&mut socket);
-            if message["type"] == "set-open" {
-                assert_eq!(message, serde_json::json!({"type":"set-open","open":false}));
-                break;
+            if ["set-open", "remove", "move"].contains(&message["type"].as_str().unwrap_or("")) {
+                sent.push(message);
             }
         }
+        assert_eq!(
+            sent,
+            [
+                serde_json::json!({"type":"set-open","open":false}),
+                serde_json::json!({"type":"remove","id":"r1"}),
+                serde_json::json!({"type":"move","id":"r2","to":2}),
+            ]
+        );
         handle.stop();
     }
 

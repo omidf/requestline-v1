@@ -277,6 +277,10 @@ pub enum SimplyLoveOnlineRequest {
     },
     /// Requestline's in-game switch: open or close the page's requests.
     SetRequestlineOpen(bool),
+    /// Requestline: take a request off the queue without playing it.
+    RemoveRequest(String),
+    /// Requestline: move a request to a place in the queue (0 is next).
+    MoveRequest { id: String, to: usize },
     FetchGrade(String),
 }
 

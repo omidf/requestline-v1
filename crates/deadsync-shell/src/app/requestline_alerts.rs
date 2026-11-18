@@ -10,9 +10,11 @@
 use super::{App, CurrentScreen};
 use deadlib_present::actors::Actor;
 use deadsync_config::requestline::{
-    RequestlineOptions, RequestlineSide, RequestlineSound, RequestlineSoundTiming,
-    RequestlineToastCorner, RequestlineVisual,
+    RequestlineOptions, RequestlineSound, RequestlineSoundTiming, RequestlineToastCorner,
+    RequestlineVisual,
 };
+use deadsync_profile::PlayerSide;
+use deadsync_theme_simply_love::screens::components::shared::request_toast::ToastSpot;
 use deadsync_online::requestline::QueueEntry;
 use std::time::{Duration, Instant};
 
@@ -143,12 +145,14 @@ impl RequestAlerts {
     }
 }
 
-/// Auto: the corner opposite the requests profile's side.
-const fn corner(options: &RequestlineOptions) -> RequestlineToastCorner {
-    match (options.corner, options.side) {
-        (RequestlineToastCorner::Auto, RequestlineSide::P1) => RequestlineToastCorner::BottomRight,
-        (RequestlineToastCorner::Auto, RequestlineSide::P2) => RequestlineToastCorner::BottomLeft,
-        (corner, _) => corner,
+/// Auto keeps the popup off the notefields: one player on P1 puts it bottom
+/// right, one on P2 bottom left, two players bottom center between them.
+const fn spot(corner: RequestlineToastCorner, p1_joined: bool, p2_joined: bool) -> ToastSpot {
+    match (corner, p1_joined, p2_joined) {
+        (RequestlineToastCorner::Auto, true, true) => ToastSpot::BottomCenter,
+        (RequestlineToastCorner::Auto, false, true) => ToastSpot::BottomLeft,
+        (RequestlineToastCorner::Auto, _, _) => ToastSpot::BottomRight,
+        (corner, _, _) => ToastSpot::corner(corner),
     }
 }
 
@@ -189,7 +193,11 @@ impl App {
                 title: toast.title.shown(translit),
                 requester: &toast.requester,
                 more: toast.more,
-                corner: corner(&options),
+                spot: spot(
+                    options.corner,
+                    deadsync_profile::runtime_session_side_joined(PlayerSide::P1),
+                    deadsync_profile::runtime_session_side_joined(PlayerSide::P2),
+                ),
                 visibility,
                 slide: !in_song,
             },
@@ -297,12 +305,12 @@ mod tests {
     }
 
     #[test]
-    fn auto_corner_is_opposite_the_requests_profile() {
-        let mut options = on();
-        assert_eq!(corner(&options), RequestlineToastCorner::BottomRight);
-        options.side = RequestlineSide::P2;
-        assert_eq!(corner(&options), RequestlineToastCorner::BottomLeft);
-        options.corner = RequestlineToastCorner::TopLeft;
-        assert_eq!(corner(&options), RequestlineToastCorner::TopLeft);
+    fn auto_keeps_the_popup_off_the_notefields() {
+        let auto = RequestlineToastCorner::Auto;
+        assert_eq!(spot(auto, true, false), ToastSpot::BottomRight, "P1 alone");
+        assert_eq!(spot(auto, false, true), ToastSpot::BottomLeft, "P2 alone");
+        assert_eq!(spot(auto, true, true), ToastSpot::BottomCenter, "two players");
+        // A corner the streamer picked stays put.
+        assert_eq!(spot(RequestlineToastCorner::TopLeft, true, true), ToastSpot::TopLeft);
     }
 }

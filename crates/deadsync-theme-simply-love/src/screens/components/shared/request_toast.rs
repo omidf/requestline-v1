@@ -25,6 +25,9 @@ use deadsync_config::requestline::RequestlineToastCorner;
 const TOAST_Z: i16 = 31900;
 /// At most 240 wide in the 854x480 layout (about 28% of the width).
 const WIDTH: f32 = 240.0;
+/// Bottom center fits in the gap between two players' notefields (about 170
+/// wide at 16:9).
+const CENTER_WIDTH: f32 = 160.0;
 const HEIGHT: f32 = 38.0;
 /// In from the side edge.
 const MARGIN_X: f32 = 16.0;
@@ -43,6 +46,33 @@ const NAME_ZOOM: f32 = 0.6;
 const SLIDE: f32 = 24.0;
 const ELLIPSIS: &str = "…";
 
+/// Where the popup sits. The shell turns the Auto setting into one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastSpot {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    /// Between two players' notefields.
+    BottomCenter,
+}
+
+impl ToastSpot {
+    /// A corner the streamer picked. `Auto` is resolved by the caller; it
+    /// falls back to bottom right here.
+    #[must_use]
+    pub const fn corner(corner: RequestlineToastCorner) -> Self {
+        match corner {
+            RequestlineToastCorner::TopLeft => Self::TopLeft,
+            RequestlineToastCorner::TopRight => Self::TopRight,
+            RequestlineToastCorner::BottomLeft => Self::BottomLeft,
+            RequestlineToastCorner::BottomRight | RequestlineToastCorner::Auto => {
+                Self::BottomRight
+            }
+        }
+    }
+}
+
 /// One frame of the popup.
 pub struct RequestToast<'a> {
     pub emoji: &'a str,
@@ -50,8 +80,7 @@ pub struct RequestToast<'a> {
     pub requester: &'a str,
     /// Further requests shown with this one.
     pub more: usize,
-    /// Never `Auto`: the shell picks the spot first.
-    pub corner: RequestlineToastCorner,
+    pub spot: ToastSpot,
     /// 0 hidden .. 1 fully shown.
     pub visibility: f32,
     /// Slide in from the edge; `false` only fades (during a song, where
@@ -85,21 +114,29 @@ fn fit(text: &str, max_width: f32, zoom: f32, measure: &impl Fn(&str) -> f32) ->
     format!("{}{ELLIPSIS}", text[..ends[lo - 1]].trim_end())
 }
 
-/// The panel's top-left corner when fully shown, and which way it slides in
-/// from (-1 from the left edge, 1 from the right).
-fn origin(corner: RequestlineToastCorner, w: f32, h: f32) -> (f32, f32, f32) {
+/// Where the panel sits when fully shown.
+struct Frame {
+    x: f32,
+    y: f32,
+    width: f32,
+    /// Which way it slides in from: x -1 from the left edge, 1 from the
+    /// right; y 1 from the bottom edge.
+    from: (f32, f32),
+}
+
+fn frame(spot: ToastSpot, w: f32, h: f32) -> Frame {
     let left = MARGIN_X;
     let right = w - MARGIN_X - WIDTH;
     let top = MARGIN_Y;
     let bottom = h - MARGIN_Y - HEIGHT;
-    match corner {
-        RequestlineToastCorner::TopLeft => (left, top, -1.0),
-        RequestlineToastCorner::TopRight => (right, top, 1.0),
-        RequestlineToastCorner::BottomLeft => (left, bottom, -1.0),
-        RequestlineToastCorner::BottomRight | RequestlineToastCorner::Auto => {
-            (right, bottom, 1.0)
-        }
-    }
+    let (x, y, width, from) = match spot {
+        ToastSpot::TopLeft => (left, top, WIDTH, (-1.0, 0.0)),
+        ToastSpot::TopRight => (right, top, WIDTH, (1.0, 0.0)),
+        ToastSpot::BottomLeft => (left, bottom, WIDTH, (-1.0, 0.0)),
+        ToastSpot::BottomRight => (right, bottom, WIDTH, (1.0, 0.0)),
+        ToastSpot::BottomCenter => ((w - CENTER_WIDTH) * 0.5, bottom, CENTER_WIDTH, (0.0, 1.0)),
+    };
+    Frame { x, y, width, from }
 }
 
 pub fn push(actors: &mut Vec<Actor>, toast: &RequestToast<'_>, assets: &AssetManager) {
@@ -107,17 +144,16 @@ pub fn push(actors: &mut Vec<Actor>, toast: &RequestToast<'_>, assets: &AssetMan
     if shown <= 0.0 {
         return;
     }
-    let (x0, y, from) = origin(toast.corner, screen_width(), screen_height());
+    let frame = frame(toast.spot, screen_width(), screen_height());
     let eased = 1.0 - (1.0 - shown) * (1.0 - shown);
-    let x = if toast.slide {
-        x0 + from * SLIDE * (1.0 - eased)
-    } else {
-        x0
-    };
+    let slide = if toast.slide { SLIDE * (1.0 - eased) } else { 0.0 };
+    let x = frame.x + frame.from.0 * slide;
+    let y = frame.y + frame.from.1 * slide;
+    let width = frame.width;
     let a = eased;
 
     let text_x = x + PAD + ICON_SIZE + PAD;
-    let text_w = x + WIDTH - PAD - text_x;
+    let text_w = x + width - PAD - text_x;
     let mut second = toast.requester.trim().to_owned();
     if toast.more > 0 {
         second.push_str("  ");
@@ -140,7 +176,7 @@ pub fn push(actors: &mut Vec<Actor>, toast: &RequestToast<'_>, assets: &AssetMan
 
     actors.reserve(4);
     actors.push(act!(quad:
-        align(0.0, 0.0): xy(x, y): zoomto(WIDTH, HEIGHT):
+        align(0.0, 0.0): xy(x, y): zoomto(width, HEIGHT):
         diffuse(0.0, 0.0, 0.0, 0.85 * a): z(TOAST_Z)
     ));
     actors.push(act!(text:
@@ -183,16 +219,34 @@ mod tests {
     }
 
     #[test]
-    fn each_corner_sits_inside_the_screen() {
+    fn each_spot_sits_inside_the_screen() {
         let (w, h) = (854.0, 480.0);
-        for corner in RequestlineToastCorner::ALL {
-            let (x, y, _) = origin(*corner, w, h);
-            assert!(x >= MARGIN_X - 0.01 && x + WIDTH <= w - MARGIN_X + 0.01, "{corner:?}");
-            assert!(y >= 0.0 && y + HEIGHT <= h, "{corner:?}");
+        for spot in [
+            ToastSpot::TopLeft,
+            ToastSpot::TopRight,
+            ToastSpot::BottomLeft,
+            ToastSpot::BottomRight,
+            ToastSpot::BottomCenter,
+        ] {
+            let f = frame(spot, w, h);
+            assert!(f.x >= MARGIN_X - 0.01 && f.x + f.width <= w - MARGIN_X + 0.01, "{spot:?}");
+            assert!(f.y >= 0.0 && f.y + HEIGHT <= h, "{spot:?}");
         }
-        let (left, _, from_left) = origin(RequestlineToastCorner::BottomLeft, w, h);
-        let (right, _, from_right) = origin(RequestlineToastCorner::BottomRight, w, h);
-        assert!(left < w / 2.0 && right > w / 2.0);
-        assert!(from_left < 0.0 && from_right > 0.0, "slides in from the nearer edge");
+        let left = frame(ToastSpot::BottomLeft, w, h);
+        let right = frame(ToastSpot::BottomRight, w, h);
+        assert!(left.x < w / 2.0 && right.x > w / 2.0);
+        assert!(left.from.0 < 0.0 && right.from.0 > 0.0, "slides in from the nearer edge");
+    }
+
+    #[test]
+    fn bottom_center_fits_between_two_notefields_at_16_9() {
+        // Versus at 854 wide: the notefields are centered a quarter of the
+        // width out from the middle, 256 wide each (four 64px columns).
+        let (w, h) = (854.0, 480.0);
+        let p1_right = w * 0.25 + 128.0;
+        let p2_left = w * 0.75 - 128.0;
+        let f = frame(ToastSpot::BottomCenter, w, h);
+        assert!(f.x >= p1_right && f.x + f.width <= p2_left, "{} {}", f.x, f.x + f.width);
+        assert!(f.from == (0.0, 1.0), "rises from the bottom");
     }
 }
