@@ -21668,15 +21668,19 @@ mod tests {
 
         super::requests::apply_view(&mut state, requests_view(linked(true), &[r1], 1));
         let chip = super::requests::chip(&state).unwrap();
-        assert_eq!((chip.count, chip.open), (1, true));
+        assert_eq!(chip.count, 1);
         assert_eq!(chip.since_new, Some(0.0), "the first queue counts as new");
 
         // A request played or cancelled: no new morph.
         state.session_elapsed = 40.0;
-        super::requests::apply_view(&mut state, requests_view(linked(false), &[], 2));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[], 2));
         let chip = super::requests::chip(&state).unwrap();
-        assert_eq!((chip.count, chip.open), (0, false));
+        assert_eq!(chip.count, 0);
         assert_eq!(chip.since_new, Some(30.0));
+
+        // Requests closed: no chip at all.
+        super::requests::apply_view(&mut state, requests_view(linked(false), &[], 2));
+        assert!(super::requests::chip(&state).is_none());
 
         // A new one: the morph starts again.
         super::requests::apply_view(&mut state, requests_view(linked(true), &[r2], 3));

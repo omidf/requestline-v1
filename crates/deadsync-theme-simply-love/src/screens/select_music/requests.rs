@@ -158,11 +158,13 @@ pub(super) fn cancel_highlighted(state: &mut State) -> Option<String> {
 }
 
 /// The footer's pending-requests chip: shown by the requests profile's name
-/// while the game is linked.
+/// while the game is linked and requests are open.
 pub(super) fn chip(state: &State) -> Option<RequestChip<'_>> {
     use deadsync_config::requestline::RequestlineSide;
     let view = state.requests.view.as_ref().filter(|view| view.enabled)?;
-    let open = linked(state)?;
+    if linked(state) != Some(true) {
+        return None;
+    }
     let (side, idx) = match view.side {
         RequestlineSide::P1 => (ChipSide::P1, 0),
         RequestlineSide::P2 => (ChipSide::P2, 1),
@@ -174,7 +176,6 @@ pub(super) fn chip(state: &State) -> Option<RequestChip<'_>> {
         side,
         name: &state.profiles.display_names[idx],
         count: queue(state).len(),
-        open,
         icon: view.icon,
         since_new: state
             .requests

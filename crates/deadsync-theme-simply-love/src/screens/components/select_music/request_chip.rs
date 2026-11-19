@@ -45,7 +45,6 @@ pub struct RequestChip<'a> {
     /// The requests profile's name as the footer shows it.
     pub name: &'a str,
     pub count: usize,
-    pub open: bool,
     pub icon: &'a str,
     /// Seconds since new requests came in, while the morph may still run.
     pub since_new: Option<f32>,
@@ -109,17 +108,10 @@ pub fn push(actors: &mut Vec<Actor>, chip: &RequestChip<'_>, accent: [f32; 4], a
     let center_y = screen_height() - 16.0;
 
     let rgb = [accent[0], accent[1], accent[2]];
-    let (fill, count_rgb) = if chip.open {
-        // Dark with a light count at rest; the accent itself with a white
-        // count in the icon form, where the dark emoji needs a light ground.
-        (
-            mix(mix([0.0; 3], rgb, 0.3), rgb, t),
-            mix(mix(rgb, [1.0; 3], 0.35), [1.0; 3], t),
-        )
-    } else {
-        // Closed: grey, so it reads as off at a glance.
-        (mix([0.29; 3], [0.6; 3], t), [1.0; 3])
-    };
+    // Dark with a light count at rest; the accent itself with a white count
+    // in the icon form, where the dark emoji needs a light ground.
+    let fill = mix(mix([0.0; 3], rgb, 0.3), rgb, t);
+    let count_rgb = mix(mix(rgb, [1.0; 3], 0.35), [1.0; 3], t);
     let count_x = left + PAD + (ICON_SIZE + INNER_GAP) * t;
     let label_x = left + PAD + count_w + INNER_GAP;
     // The label goes before the pill has shrunk past it.
