@@ -69,8 +69,6 @@ pub enum Action {
     PlayNextRequest,
     /// Requestline: open or close requests on the page.
     ToggleRequests,
-    /// Requestline: move the request the wheel is on two places down.
-    SkipRequest,
     /// Requestline: take the request the wheel is on off the queue.
     CancelRequest,
     /// Requestline is not connected; the item only explains why.

@@ -10062,13 +10062,6 @@ fn dispatch_menu_action(
             }
             ThemeEffect::None
         }
-        select_music_menu::Action::SkipRequest => {
-            if let Some((id, to)) = requests::skip_highlighted(state) {
-                queue_online(state, crate::SimplyLoveOnlineRequest::MoveRequest { id, to });
-            }
-            hide_select_music_menu(state);
-            ThemeEffect::None
-        }
         select_music_menu::Action::CancelRequest => {
             if let Some(id) = requests::cancel_highlighted(state) {
                 queue_online(state, crate::SimplyLoveOnlineRequest::RemoveRequest(id));
@@ -21562,7 +21555,7 @@ mod tests {
     }
 
     #[test]
-    fn the_highlighted_request_can_be_skipped_or_cancelled() {
+    fn the_highlighted_request_can_be_cancelled() {
         use super::select_music_menu::Action;
         let mut state = requests_state();
         let (r1, r2, r3) = (
@@ -21574,31 +21567,24 @@ mod tests {
         super::requests::apply_view(&mut state, requests_view(linked(true), &[r1, r2, r3], 1));
         assert!(menu_actions(&state).is_empty(), "not on the Requests view");
         assert!(super::requests::play_next(&mut state));
-        assert_eq!(menu_actions(&state), [Action::SkipRequest, Action::CancelRequest]);
-
-        // Skip moves it two places down; the wheel lands on the next one.
-        assert_eq!(super::requests::skip_highlighted(&mut state), Some(("r1".to_owned(), 2)));
-        super::requests::apply_view(&mut state, requests_view(linked(true), &[r2, r3, r1], 2));
-        assert_eq!(wheel_titles(&state.all_entries), ["[Requests 3]", "Gamma", "Beta", "Alpha"]);
-        assert_eq!(selected_title(&state).as_deref(), Some("Gamma"));
+        assert_eq!(menu_actions(&state), [Action::CancelRequest]);
 
         // Cancel takes it off; the wheel lands on the one after it.
-        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r2"));
-        super::requests::apply_view(&mut state, requests_view(linked(true), &[r3, r1], 3));
-        assert_eq!(selected_title(&state).as_deref(), Some("Beta"));
-
-        // The last request can't move further down, only be cancelled; the
-        // wheel then lands on the one before it.
-        select_title(&mut state, "Alpha");
-        assert_eq!(menu_actions(&state), [Action::CancelRequest]);
-        assert_eq!(super::requests::skip_highlighted(&mut state), None);
         assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r1"));
-        super::requests::apply_view(&mut state, requests_view(linked(true), &[r3], 4));
-        assert_eq!(selected_title(&state).as_deref(), Some("Beta"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r2, r3], 2));
+        assert_eq!(wheel_titles(&state.all_entries), ["[Requests 2]", "Gamma", "Beta"]);
+        assert_eq!(selected_title(&state).as_deref(), Some("Gamma"));
+
+        // Cancelling the last in line lands on the one before it.
+        select_title(&mut state, "Beta");
+        assert_eq!(menu_actions(&state), [Action::CancelRequest]);
+        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r3"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r2], 3));
+        assert_eq!(selected_title(&state).as_deref(), Some("Gamma"));
 
         // Cancelling the last one leaves the Requests view.
-        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r3"));
-        super::requests::apply_view(&mut state, requests_view(linked(true), &[], 5));
+        assert_eq!(super::requests::cancel_highlighted(&mut state).as_deref(), Some("r2"));
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[], 4));
         assert!(!super::requests::showing(&state));
 
         // Not connected: nothing to offer.

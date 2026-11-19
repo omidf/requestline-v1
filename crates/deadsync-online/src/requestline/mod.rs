@@ -445,11 +445,6 @@ pub fn remove_request(id: String) {
     send_queue_action(QueueAction::Remove { id });
 }
 
-/// Move a request to a place in the queue (0 is next).
-pub fn move_request(id: String, to: usize) {
-    send_queue_action(QueueAction::Move { id, to });
-}
-
 /// A song started (not a restart): its first request leaves the queue.
 /// Fire and forget; never blocks gameplay.
 pub fn on_song_started(simfile_path: &Path, chart_hash: &str) {

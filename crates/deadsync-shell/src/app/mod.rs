@@ -6698,13 +6698,6 @@ impl App {
                     deadsync_online::requestline::remove_request(id);
                     Vec::new()
                 }
-                SimplyLoveRuntimeRequest::Online(SimplyLoveOnlineRequest::MoveRequest {
-                    id,
-                    to,
-                }) => {
-                    deadsync_online::requestline::move_request(id, to);
-                    Vec::new()
-                }
             },
         };
         self.run_commands(commands, event_loop);

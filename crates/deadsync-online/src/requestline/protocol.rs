@@ -33,12 +33,6 @@ pub(super) enum Outgoing {
     Remove {
         id: String,
     },
-    /// Move a request to a place in the queue (0 is next), as the site's
-    /// "Skip for now" does. Answered with a state.
-    Move {
-        id: String,
-        to: usize,
-    },
     /// The song finished, failed or was quit (not restarted). No reply.
     #[serde(rename_all = "camelCase")]
     Ended {

@@ -40,7 +40,6 @@ pub(super) enum Command {
 pub(super) enum QueueAction {
     SetOpen(bool),
     Remove { id: String },
-    Move { id: String, to: usize },
 }
 
 impl QueueAction {
@@ -48,7 +47,6 @@ impl QueueAction {
         match self {
             Self::SetOpen(open) => Outgoing::SetOpen { open },
             Self::Remove { id } => Outgoing::Remove { id },
-            Self::Move { id, to } => Outgoing::Move { id, to },
         }
     }
 }
@@ -1104,14 +1102,10 @@ mod tests {
             .tx
             .send(Command::Queue(QueueAction::Remove { id: "r1".into() }))
             .unwrap();
-        handle
-            .tx
-            .send(Command::Queue(QueueAction::Move { id: "r2".into(), to: 2 }))
-            .unwrap();
         let mut sent = Vec::new();
-        while sent.len() < 3 {
+        while sent.len() < 2 {
             let message = recv_json(&mut socket);
-            if ["set-open", "remove", "move"].contains(&message["type"].as_str().unwrap_or("")) {
+            if ["set-open", "remove"].contains(&message["type"].as_str().unwrap_or("")) {
                 sent.push(message);
             }
         }
@@ -1120,7 +1114,6 @@ mod tests {
             [
                 serde_json::json!({"type":"set-open","open":false}),
                 serde_json::json!({"type":"remove","id":"r1"}),
-                serde_json::json!({"type":"move","id":"r2","to":2}),
             ]
         );
         handle.stop();

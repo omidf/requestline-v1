@@ -36,10 +36,6 @@ pub(super) struct Requests {
     focus_after_change: Option<Arc<SongData>>,
 }
 
-/// "Skip" moves a request this many places down, as the site's "Skip for now"
-/// moves the next request to third.
-const SKIP_PLACES: usize = 2;
-
 /// Whether the shell's view differs from what Select Music last applied.
 pub fn requestline_view_stale(
     state: &State,
@@ -139,20 +135,6 @@ fn neighbour(state: &State, at: usize) -> Option<Arc<SongData>> {
         .get(at + 1)
         .or_else(|| at.checked_sub(1).and_then(|before| playable.get(before)))
         .map(|(_, song)| Arc::clone(song))
-}
-
-/// Skip the highlighted request: it moves two places down the queue. `None`
-/// when there is nothing to skip (no request highlighted, or it is last).
-pub(super) fn skip_highlighted(state: &mut State) -> Option<(String, usize)> {
-    let (index, at) = highlighted(state)?;
-    let queue = queue(state);
-    let to = (index + SKIP_PLACES).min(queue.len().saturating_sub(1));
-    if to == index {
-        return None;
-    }
-    let id = queue[index].id.clone();
-    state.requests.focus_after_change = neighbour(state, at);
-    Some((id, to))
 }
 
 /// Cancel the highlighted request: it leaves the queue unplayed.
@@ -304,7 +286,7 @@ fn item(top: Arc<str>, bottom: Arc<str>, action: select_music_menu::Action) -> s
     }
 }
 
-/// Skip and Cancel for the request the wheel is on, listed first in the menu.
+/// Cancel for the request the wheel is on, listed first in the menu.
 pub(super) fn highlighted_items(state: &State) -> Vec<select_music_menu::Item> {
     use select_music_menu::Action;
     let Some((index, _)) = highlighted(state) else {
@@ -313,23 +295,13 @@ pub(super) fn highlighted_items(state: &State) -> Vec<select_music_menu::Item> {
     if linked(state).is_none() {
         return Vec::new();
     }
-    let queue = queue(state);
-    let entry = &queue[index];
+    let entry = &queue(state)[index];
     let title_for = crate::i18n::tr_fmt(
         S,
         "RequestTitleFor",
         &[("title", entry.title.as_str()), ("name", entry.name.as_str())],
     );
-    let mut items = Vec::with_capacity(2);
-    if index + 1 < queue.len() {
-        items.push(item(
-            crate::i18n::tr(S, "SkipRequest"),
-            crate::i18n::tr(S, "SkipRequestHelp"),
-            Action::SkipRequest,
-        ));
-    }
-    items.push(item(crate::i18n::tr(S, "CancelRequest"), title_for, Action::CancelRequest));
-    items
+    vec![item(crate::i18n::tr(S, "CancelRequest"), title_for, Action::CancelRequest)]
 }
 
 /// The Requestline... category's items, or `None` when Requestline is off.
