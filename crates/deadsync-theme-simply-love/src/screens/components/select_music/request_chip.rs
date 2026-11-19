@@ -1,9 +1,9 @@
 //! Requestline's pending-requests chip, beside the requests profile's name in
 //! Select Music's footer.
 //!
-//! At rest it reads "3 requests". When new requests come in it morphs to the
-//! popup's icon and the count ("🎵 3") and back, a few times, to catch the
-//! streamer's eye, then settles.
+//! At rest it shows the popup's icon and the count ("🎵 3"). When new requests
+//! come in it morphs to "3 requests" and back, a few times, to catch the
+//! streamer's eye, then settles on the icon.
 
 use crate::act;
 use crate::screens::components::shared::screen_bar;
@@ -27,7 +27,7 @@ const ICON_SIZE: f32 = 11.0;
 const ICON_ZOOM: f32 = ICON_SIZE / 23.0;
 
 /// How the attention morph runs: this many times, one every `PERIOD` seconds,
-/// each a `MORPH` to the icon, a hold, and a `MORPH` back.
+/// each a `MORPH` to the words, a hold, and a `MORPH` back to the icon.
 const CYCLES: f32 = 3.0;
 const PERIOD: f32 = 5.0;
 const MORPH: f32 = 0.35;
@@ -50,10 +50,10 @@ pub struct RequestChip<'a> {
     pub since_new: Option<f32>,
 }
 
-/// How far the chip is toward the icon form at `since` seconds after new
-/// requests came in: 0 reads "3 requests", 1 reads "🎵 3".
+/// How far the chip is toward the words at `since` seconds after new requests
+/// came in: 0 reads "🎵 3", 1 reads "3 requests".
 #[must_use]
-pub fn icon_amount(since: f32) -> f32 {
+pub fn words_amount(since: f32) -> f32 {
     if !(0.0..CYCLES * PERIOD).contains(&since) {
         return 0.0;
     }
@@ -97,7 +97,8 @@ pub fn push(actors: &mut Vec<Actor>, chip: &RequestChip<'_>, accent: [f32; 4], a
     let count_w = count_w * COUNT_ZOOM;
     let label_w = label_w * LABEL_ZOOM;
 
-    let t = chip.since_new.map_or(0.0, icon_amount);
+    // 1 is the icon form, 0 the words.
+    let t = 1.0 - chip.since_new.map_or(0.0, words_amount);
     let words_w = PAD + count_w + INNER_GAP + label_w + PAD;
     let icon_w = PAD + ICON_SIZE + INNER_GAP + count_w + PAD;
     let width = lerp(words_w, icon_w, t);
@@ -149,25 +150,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_morph_runs_three_times_then_rests_on_the_words() {
-        assert_eq!(icon_amount(-1.0), 0.0);
-        assert_eq!(icon_amount(0.0), 0.0);
-        assert_eq!(icon_amount(1.0), 1.0, "holding the icon");
-        assert_eq!(icon_amount(3.0), 0.0, "back to the words");
+    fn the_morph_runs_three_times_then_rests_on_the_icon() {
+        assert_eq!(words_amount(-1.0), 0.0);
+        assert_eq!(words_amount(0.0), 0.0);
+        assert_eq!(words_amount(1.0), 1.0, "holding the words");
+        assert_eq!(words_amount(3.0), 0.0, "back to the icon");
         let peaks = (0..200)
             .map(|i| i as f32 * 0.1)
-            .filter(|&t| icon_amount(t) == 1.0 && icon_amount(t - 0.1) < 1.0)
+            .filter(|&t| words_amount(t) == 1.0 && words_amount(t - 0.1) < 1.0)
             .count();
         assert_eq!(peaks, 3);
-        assert_eq!(icon_amount(15.0), 0.0);
-        assert_eq!(icon_amount(60.0), 0.0);
+        assert_eq!(words_amount(15.0), 0.0);
+        assert_eq!(words_amount(60.0), 0.0);
     }
 
     #[test]
     fn the_morph_is_smooth() {
-        let mut last = icon_amount(0.0);
+        let mut last = words_amount(0.0);
         for i in 1..1500 {
-            let now = icon_amount(i as f32 * 0.01);
+            let now = words_amount(i as f32 * 0.01);
             assert!((now - last).abs() < 0.1, "jump at {}s", i as f32 * 0.01);
             last = now;
         }
