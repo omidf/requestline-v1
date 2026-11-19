@@ -1015,6 +1015,11 @@ pub struct SelectMusicRequestlineView {
     /// change, including the queue being forgotten.
     pub generation: u64,
     pub queue: Option<Arc<deadsync_online::requestline::QueueSnapshot>>,
+    /// The side whose profile runs requestline; the footer's pending-requests
+    /// chip sits by its name.
+    pub side: deadsync_config::requestline::RequestlineSide,
+    /// The new-request popup's icon, or a note while the popup is off.
+    pub icon: &'static str,
 }
 
 /// Shell-prepared runtime data consumed by Simply Love's Select Music screen.

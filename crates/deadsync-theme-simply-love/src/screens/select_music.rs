@@ -13140,6 +13140,14 @@ pub fn push_actors(
         }),
         visual_policy,
     );
+    if let Some(chip) = requests::chip(state) {
+        crate::screens::components::select_music::request_chip::push(
+            actors,
+            &chip,
+            color::simply_love_rgba(state.active_color_index),
+            asset_manager,
+        );
+    }
 
     let scorebox_cycle_enabled = presentation.scorebox_cycle_enabled;
 
@@ -21394,8 +21402,12 @@ mod tests {
                 generation,
                 entries,
             })),
+            side: deadsync_config::requestline::RequestlineSide::P1,
+            icon: NOTE,
         }
     }
+
+    const NOTE: &str = "\u{1F3B5}";
 
     fn linked(open: bool) -> deadsync_online::requestline::Status {
         deadsync_online::requestline::Status::Linked {
@@ -21632,12 +21644,54 @@ mod tests {
     fn requestline_view_is_stale_only_when_something_changed() {
         let mut state = requests_state();
         let status = linked(true);
-        assert!(super::requestline_view_stale(&state, true, &status, 4));
+        use deadsync_config::requestline::RequestlineSide::{P1, P2};
+        assert!(super::requestline_view_stale(&state, true, &status, 4, P1, NOTE));
         super::requests::apply_view(&mut state, requests_view(status.clone(), &[], 4));
-        assert!(!super::requestline_view_stale(&state, true, &status, 4));
-        assert!(super::requestline_view_stale(&state, true, &status, 5));
-        assert!(super::requestline_view_stale(&state, false, &status, 4));
-        assert!(super::requestline_view_stale(&state, true, &linked(false), 4));
+        assert!(!super::requestline_view_stale(&state, true, &status, 4, P1, NOTE));
+        assert!(super::requestline_view_stale(&state, true, &status, 5, P1, NOTE));
+        assert!(super::requestline_view_stale(&state, false, &status, 4, P1, NOTE));
+        assert!(super::requestline_view_stale(&state, true, &linked(false), 4, P1, NOTE));
+        assert!(super::requestline_view_stale(&state, true, &status, 4, P2, NOTE));
+        assert!(super::requestline_view_stale(&state, true, &status, 4, P1, "\u{1F514}"));
+    }
+
+    #[test]
+    fn the_request_chip_shows_by_the_requests_profile_and_marks_new_requests() {
+        let mut state = requests_state();
+        let (r1, r2) = (("r1", "Pack A/Song A1", "Alpha"), ("r2", "Pack B/Song B1", "Gamma"));
+        state.session.joined = [true, false];
+        state.session.guest = [false, false];
+        state.session_elapsed = 10.0;
+
+        super::requests::apply_view(&mut state, requests_view(deadsync_online::requestline::Status::Unreachable, &[r1], 1));
+        assert!(super::requests::chip(&state).is_none(), "not linked");
+
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r1], 1));
+        let chip = super::requests::chip(&state).unwrap();
+        assert_eq!((chip.count, chip.open), (1, true));
+        assert_eq!(chip.since_new, Some(0.0), "the first queue counts as new");
+
+        // A request played or cancelled: no new morph.
+        state.session_elapsed = 40.0;
+        super::requests::apply_view(&mut state, requests_view(linked(false), &[], 2));
+        let chip = super::requests::chip(&state).unwrap();
+        assert_eq!((chip.count, chip.open), (0, false));
+        assert_eq!(chip.since_new, Some(30.0));
+
+        // A new one: the morph starts again.
+        super::requests::apply_view(&mut state, requests_view(linked(true), &[r2], 3));
+        assert_eq!(super::requests::chip(&state).unwrap().since_new, Some(0.0));
+
+        // Only by the requests profile's side, and only while it is joined.
+        let mut on_p2 = requests_view(linked(true), &[r2], 3);
+        on_p2.side = deadsync_config::requestline::RequestlineSide::P2;
+        super::requests::apply_view(&mut state, on_p2);
+        assert!(super::requests::chip(&state).is_none());
+        state.session.joined = [true, true];
+        assert_eq!(
+            super::requests::chip(&state).unwrap().side,
+            crate::screens::components::select_music::request_chip::Side::P2
+        );
     }
 
     #[test]

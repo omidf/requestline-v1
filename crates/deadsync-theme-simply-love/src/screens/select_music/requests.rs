@@ -10,6 +10,7 @@ use super::{
     MusicWheelEntry, State, WheelSortMode, apply_wheel_sort, focus_song_from_search,
     select_music_menu, set_selected_steps_index_for_sync,
 };
+use crate::screens::components::select_music::request_chip::{RequestChip, Side as ChipSide};
 use crate::views::SelectMusicRequestlineView;
 use deadlib_present::actors::TextContent;
 use deadsync_chart::SongData;
@@ -31,9 +32,12 @@ pub(super) struct Requests {
     playable: Vec<(usize, Arc<SongData>)>,
     /// The Requests view: one header and the playable songs. Empty when none.
     pub(super) entries: Arc<[MusicWheelEntry]>,
-    /// After a skip or cancel, the request to land on once the server's new
-    /// queue arrives.
+    /// After a cancel, the request to land on once the server's new queue
+    /// arrives.
     focus_after_change: Option<Arc<SongData>>,
+    /// When the queue last grew (`session_elapsed`), for the footer chip's
+    /// attention morph.
+    grew_at: Option<f32>,
 }
 
 /// Whether the shell's view differs from what Select Music last applied.
@@ -42,11 +46,15 @@ pub fn requestline_view_stale(
     enabled: bool,
     status: &Status,
     generation: u64,
+    side: deadsync_config::requestline::RequestlineSide,
+    icon: &str,
 ) -> bool {
     state.requests.view.as_ref().is_none_or(|view| {
         view.enabled != enabled
             || &view.status != status
             || view.generation != generation
+            || view.side != side
+            || view.icon != icon
     })
 }
 
@@ -56,7 +64,11 @@ pub(super) fn apply_view(state: &mut State, view: SelectMusicRequestlineView) {
         .view
         .as_ref()
         .is_none_or(|old| old.queue != view.queue);
+    let before = queue(state).len();
     state.requests.view = Some(view);
+    if queue(state).len() > before {
+        state.requests.grew_at = Some(state.session_elapsed);
+    }
     if queue_changed {
         rebuild(state);
         if showing(state) {
@@ -143,6 +155,32 @@ pub(super) fn cancel_highlighted(state: &mut State) -> Option<String> {
     let id = queue(state)[index].id.clone();
     state.requests.focus_after_change = neighbour(state, at);
     Some(id)
+}
+
+/// The footer's pending-requests chip: shown by the requests profile's name
+/// while the game is linked.
+pub(super) fn chip(state: &State) -> Option<RequestChip<'_>> {
+    use deadsync_config::requestline::RequestlineSide;
+    let view = state.requests.view.as_ref().filter(|view| view.enabled)?;
+    let open = linked(state)?;
+    let (side, idx) = match view.side {
+        RequestlineSide::P1 => (ChipSide::P1, 0),
+        RequestlineSide::P2 => (ChipSide::P2, 1),
+    };
+    if !state.session.joined[idx] || state.session.guest[idx] {
+        return None;
+    }
+    Some(RequestChip {
+        side,
+        name: &state.profiles.display_names[idx],
+        count: queue(state).len(),
+        open,
+        icon: view.icon,
+        since_new: state
+            .requests
+            .grew_at
+            .map(|at| state.session_elapsed - at),
+    })
 }
 
 fn queue(state: &State) -> &[QueueEntry] {

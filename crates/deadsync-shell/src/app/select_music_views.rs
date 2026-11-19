@@ -395,11 +395,16 @@ impl App {
             let enabled = config.enable_arrowcloud && config.requestline.enabled;
             let status = deadsync_online::requestline::status();
             let generation = deadsync_online::requestline::queue_generation();
+            let side = config.requestline.side;
+            // The chip borrows the popup's icon; a note while the popup is off.
+            let icon = config.requestline.visual.emoji().unwrap_or("\u{1F3B5}");
             select_music::requestline_view_stale(
                 &self.state.screens.select_music_state,
                 enabled,
                 &status,
                 generation,
+                side,
+                icon,
             )
             .then(|| SelectMusicRequestlineView {
                 enabled,
@@ -408,6 +413,8 @@ impl App {
                 // The snapshot may be newer than `generation`; the next frame
                 // sees the counter moved and sends it again.
                 queue: deadsync_online::requestline::queue_snapshot(),
+                side,
+                icon,
             })
         };
         let shop_visible =
