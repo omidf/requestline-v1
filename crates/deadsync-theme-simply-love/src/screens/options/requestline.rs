@@ -50,8 +50,9 @@ pub(super) fn apply_requestline_alert_choice(
     Some(None)
 }
 
-/// The sound-timing row only matters with a sound on, the corner row only
-/// with a toast on.
+/// With Requestline off only its on/off row shows. With it on, the
+/// sound-timing row only matters with a sound on, the corner row only with a
+/// toast on.
 pub(super) fn requestline_row_shown(state: &State, row: SubRowId) -> bool {
     use deadsync_config::requestline::{RequestlineSound, RequestlineVisual};
     let choice = |id| {
@@ -62,6 +63,18 @@ pub(super) fn requestline_row_shown(state: &State, row: SubRowId) -> bool {
         )
         .unwrap_or(0)
     };
+    let refines_requestline = matches!(
+        row,
+        SubRowId::RequestlineProfile
+            | SubRowId::RequestlineStatus
+            | SubRowId::RequestlineNotifySound
+            | SubRowId::RequestlineSoundTiming
+            | SubRowId::RequestlineNotifyVisual
+            | SubRowId::RequestlineToastCorner
+    );
+    if refines_requestline && !yes_no_from_choice(choice(SubRowId::RequestlineEnabled)) {
+        return false;
+    }
     match row {
         SubRowId::RequestlineSoundTiming => {
             RequestlineSound::from_index(choice(SubRowId::RequestlineNotifySound))
@@ -160,18 +173,68 @@ mod tests {
         assert_eq!(state.requestline.side, RequestlineSide::P2);
     }
 
+    fn visible(state: &State) -> Vec<SubRowId> {
+        submenu_visible_row_indices(state, SubmenuKind::ArrowCloud, ARROWCLOUD_OPTIONS_ROWS)
+            .into_iter()
+            .map(|i| ARROWCLOUD_OPTIONS_ROWS[i].id)
+            .collect()
+    }
+
+    fn set_requestline(state: &mut State, enabled: bool) {
+        set_choice_by_id(
+            &mut state.sub[SubmenuKind::ArrowCloud].choice_indices,
+            ARROWCLOUD_OPTIONS_ROWS,
+            SubRowId::RequestlineEnabled,
+            yes_no_choice_index(enabled),
+        );
+    }
+
+    #[test]
+    fn requestline_off_hides_everything_but_its_switch() {
+        use deadsync_config::requestline::{RequestlineSound, RequestlineVisual};
+        let mut state = super::super::tests::init();
+        set_arrowcloud(&mut state, true);
+        // Every refinement on, so only the switch decides.
+        for (row, index) in [
+            (SubRowId::RequestlineNotifySound, RequestlineSound::Coin.index()),
+            (SubRowId::RequestlineNotifyVisual, RequestlineVisual::Notes.index()),
+        ] {
+            set_choice_by_id(
+                &mut state.sub[SubmenuKind::ArrowCloud].choice_indices,
+                ARROWCLOUD_OPTIONS_ROWS,
+                row,
+                index,
+            );
+        }
+        let requestline_rows = [
+            SubRowId::RequestlineProfile,
+            SubRowId::RequestlineStatus,
+            SubRowId::RequestlineNotifySound,
+            SubRowId::RequestlineSoundTiming,
+            SubRowId::RequestlineNotifyVisual,
+            SubRowId::RequestlineToastCorner,
+        ];
+        set_requestline(&mut state, false);
+        let shown = visible(&state);
+        assert!(shown.contains(&SubRowId::RequestlineEnabled));
+        assert!(shown.contains(&SubRowId::EnableArrowCloud));
+        for row in requestline_rows {
+            assert!(!shown.contains(&row), "{row:?} shown while Requestline is off");
+        }
+        set_requestline(&mut state, true);
+        let shown = visible(&state);
+        for row in requestline_rows {
+            assert!(shown.contains(&row), "{row:?} hidden while Requestline is on");
+        }
+    }
+
     #[test]
     fn alert_rows_store_settings_and_preview_the_sound() {
         use deadsync_config::requestline::{RequestlineSound, RequestlineVisual};
         let mut state = super::super::tests::init();
         set_arrowcloud(&mut state, true);
+        set_requestline(&mut state, true);
         state.view = OptionsView::Submenu(SubmenuKind::ArrowCloud);
-        let visible = |state: &State| -> Vec<SubRowId> {
-            submenu_visible_row_indices(state, SubmenuKind::ArrowCloud, ARROWCLOUD_OPTIONS_ROWS)
-                .into_iter()
-                .map(|i| ARROWCLOUD_OPTIONS_ROWS[i].id)
-                .collect()
-        };
         // Off by default, so the rows that refine them stay out of the way.
         assert!(!visible(&state).contains(&SubRowId::RequestlineSoundTiming));
         assert!(!visible(&state).contains(&SubRowId::RequestlineToastCorner));
