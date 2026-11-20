@@ -23,6 +23,16 @@ pub(super) enum Outgoing {
         song_id: String,
         chart_hash: String,
     },
+    /// The in-game requests switch. Closing counts as the streamer closing by
+    /// hand: the page stays closed until opened again. Answered with a state.
+    SetOpen {
+        open: bool,
+    },
+    /// Take a request off the queue without playing it, as the streamer's
+    /// Remove button does. Answered with a state.
+    Remove {
+        id: String,
+    },
     /// The song finished, failed or was quit (not restarted). No reply.
     #[serde(rename_all = "camelCase")]
     Ended {
@@ -52,6 +62,10 @@ pub(super) enum Incoming {
         open: bool,
         #[serde(default)]
         closed_by: Option<String>,
+        /// The whole queue, first to play first. An entry missing its id or
+        /// song id is dropped; the rest of the message still counts.
+        #[serde(default, deserialize_with = "lenient_queue")]
+        queue: Vec<QueueEntry>,
     },
     Pong,
     #[serde(rename_all = "camelCase")]
@@ -99,6 +113,59 @@ pub(super) enum Incoming {
     Unknown,
 }
 
+/// One request in the page's queue: what the game needs to find and credit it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueEntry {
+    pub id: String,
+    /// `Pack/SongDir`, the same id the library upload uses.
+    pub song_id: String,
+    #[serde(default)]
+    pub title: String,
+    /// The requester's ArrowCloud alias.
+    #[serde(default)]
+    pub name: String,
+    /// The chart asked for; `None` leaves the choice to the player. A chart
+    /// that doesn't parse counts as none rather than losing the request.
+    #[serde(default, deserialize_with = "lenient")]
+    pub chart: Option<RequestedChart>,
+}
+
+/// The chart a viewer picked.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct RequestedChart {
+    pub hash: String,
+    #[serde(default, deserialize_with = "lenient")]
+    pub difficulty: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    pub meter: Option<u32>,
+}
+
+/// `None` for a value that is missing or doesn't parse as `T`.
+fn lenient<'de, D, T>(de: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    Ok(serde_json::from_value(value).ok())
+}
+
+/// The queue's entries that parse; a malformed one is skipped, not fatal.
+fn lenient_queue<'de, D>(de: D) -> Result<Vec<QueueEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(de)?;
+    let serde_json::Value::Array(items) = value else {
+        return Ok(Vec::new());
+    };
+    Ok(items
+        .into_iter()
+        .filter_map(|item| serde_json::from_value(item).ok())
+        .collect())
+}
+
 /// The request that left the queue. Only what the log line needs.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub(super) struct Removed {
@@ -120,6 +187,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn state_queue_keeps_order_and_skips_what_it_cannot_read() {
+        let Some(Incoming::State { queue, .. }) = Incoming::parse(
+            r#"{"type":"state","open":true,"queue":[
+                {"id":"r1","songId":"p/a","title":"A","pack":"p","seconds":90,"name":"one","requestedAt":"t"},
+                {"songId":"p/no-id","title":"No id","name":"two"},
+                {"id":"r3","songId":"p/c","title":"C","name":"three","chart":{"hash":"cd","meter":"high"}},
+                {"id":"r4","songId":"p/d","title":"D","name":"four","chart":{"difficulty":"hard"}},
+                {"id":"r5","songId":"p/e","name":"five","chart":{"hash":"ef","difficulty":"easy","meter":3}}
+            ]}"#,
+        ) else {
+            panic!("not a state message");
+        };
+        let ids: Vec<&str> = queue.iter().map(|e| e.id.as_str()).collect();
+        assert_eq!(ids, ["r1", "r3", "r4", "r5"], "the entry without an id is skipped");
+        assert_eq!(queue[0].chart, None, "no chart: the player's choice");
+        assert_eq!(
+            queue[1].chart,
+            Some(RequestedChart {
+                hash: "cd".into(),
+                difficulty: None,
+                meter: None,
+            }),
+            "an unreadable meter loses the meter, not the chart"
+        );
+        assert_eq!(queue[2].chart, None, "a chart without a hash is no chart");
+        assert_eq!(queue[3].title, "", "a missing title is empty, not fatal");
+        assert_eq!(queue[3].chart.as_ref().unwrap().meter, Some(3));
+
+        let Some(Incoming::State { queue, .. }) =
+            Incoming::parse(r#"{"type":"state","open":true,"queue":null}"#)
+        else {
+            panic!("not a state message");
+        };
+        assert!(queue.is_empty());
+    }
+
+    #[test]
     fn outgoing_messages_match_the_contract() {
         let cases = [
             (
@@ -127,6 +231,10 @@ mod tests {
                 r#"{"type":"hello","protocol":1}"#,
             ),
             (Outgoing::Ping, r#"{"type":"ping"}"#),
+            (
+                Outgoing::SetOpen { open: true },
+                r#"{"type":"set-open","open":true}"#,
+            ),
             (Outgoing::LibraryUpload, r#"{"type":"library-upload"}"#),
             (
                 Outgoing::LibraryUploaded {
@@ -172,6 +280,17 @@ mod tests {
             Some(Incoming::State {
                 open: true,
                 closed_by: None,
+                queue: vec![QueueEntry {
+                    id: "r1".into(),
+                    song_id: "altruism2/Bounce Back".into(),
+                    title: "Bounce Back".into(),
+                    name: "AutoPlayCPU".into(),
+                    chart: Some(RequestedChart {
+                        hash: "ab".into(),
+                        difficulty: Some("challenge".into()),
+                        meter: Some(12),
+                    }),
+                }],
             })
         );
         assert_eq!(
@@ -181,6 +300,7 @@ mod tests {
             Some(Incoming::State {
                 open: false,
                 closed_by: Some("idle".into()),
+                queue: Vec::new(),
             })
         );
         assert_eq!(Incoming::parse(r#"{"type":"pong"}"#), Some(Incoming::Pong));

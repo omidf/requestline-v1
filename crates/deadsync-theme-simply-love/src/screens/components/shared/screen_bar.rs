@@ -135,6 +135,13 @@ fn current_screen_size_bits() -> [u32; 2] {
     [screen_width().to_bits(), screen_height().to_bits()]
 }
 
+/// Where the footer's player names sit: their margin in from the screen
+/// edge, and their zoom.
+#[must_use]
+pub fn footer_side_text_metrics() -> (f32, f32) {
+    (wide_scale(38.0, 45.0), wide_scale(0.8, 0.9))
+}
+
 /// Helper to select a scale factor based on screen aspect ratio.
 fn wide_scale(normal: f32, wide: f32) -> f32 {
     if space::is_wide() { wide } else { normal }

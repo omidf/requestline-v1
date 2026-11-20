@@ -19,7 +19,11 @@ pub(super) fn is_submenu_row_disabled(state: &State, kind: SubmenuKind, id: SubR
             SubmenuKind::ArrowCloud,
             SubRowId::RequestlineEnabled
             | SubRowId::RequestlineProfile
-            | SubRowId::RequestlineStatus,
+            | SubRowId::RequestlineStatus
+            | SubRowId::RequestlineNotifySound
+            | SubRowId::RequestlineSoundTiming
+            | SubRowId::RequestlineNotifyVisual
+            | SubRowId::RequestlineToastCorner,
         ) => !arrowcloud_enabled(state),
         (SubmenuKind::SelectMusic, SubRowId::WheelScoreType) => {
             get_choice_by_id(
@@ -177,6 +181,11 @@ pub(super) fn submenu_visible_row_indices(
     rows: &[SubRow],
 ) -> Vec<usize> {
     match kind {
+        SubmenuKind::ArrowCloud => rows
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, row)| requestline_row_shown(state, row.id).then_some(idx))
+            .collect(),
         SubmenuKind::Graphics => {
             let show_sw = graphics_show_software_threads(state);
             let show_max_fps = graphics_show_max_fps(state);
@@ -305,8 +314,6 @@ pub(super) fn submenu_visible_row_indices(
                     } else if row.id == SubRowId::LoopMusic && !show_previews {
                         None
                     } else if row.id == SubRowId::GsBoxPlacement && !show_scorebox {
-                        None
-                    } else if row.id == SubRowId::GsBoxLeaderboards && !show_scorebox {
                         None
                     } else if row.id == SubRowId::GsBoxEventsFirst && !show_scorebox {
                         None

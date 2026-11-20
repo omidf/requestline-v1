@@ -432,6 +432,7 @@ pub fn machine_leaderboard_entries(
     mut plays: Vec<MachineLeaderboardPlay>,
     max_entries: usize,
 ) -> Vec<LeaderboardEntry> {
+    plays.retain(|play| !play.is_fail);
     plays.sort_by(|a, b| {
         b.score_percent
             .partial_cmp(&a.score_percent)
@@ -734,13 +735,19 @@ pub enum ScoreboxPaneKind {
     Other,
 }
 
+/// Which boards the scorebox cycles through, chosen per online service.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SelectMusicScoreboxFilter {
+    pub groovestats_itg: bool,
+    pub groovestats_ex: bool,
+    /// ITL, SRPG and other event boards that come from `GrooveStats`.
+    pub groovestats_events: bool,
+    /// `ArrowCloud`'s ITG/EX/H.EX boards. The player picks which of them
+    /// `ArrowCloud` returns in their board preferences on the site.
+    pub arrowcloud_regular: bool,
+    pub arrowcloud_events: bool,
+    /// Golf features are enabled, which the golf event board also needs.
     pub golf: bool,
-    pub itg: bool,
-    pub ex: bool,
-    pub hard_ex: bool,
-    pub tournaments: bool,
     /// Show event boards ahead of the core ITG/EX boards on charts that are
     /// in an event.
     pub events_first: bool,
@@ -749,10 +756,11 @@ pub struct SelectMusicScoreboxFilter {
 impl Default for SelectMusicScoreboxFilter {
     fn default() -> Self {
         Self {
-            itg: true,
-            ex: true,
-            hard_ex: true,
-            tournaments: true,
+            groovestats_itg: true,
+            groovestats_ex: true,
+            groovestats_events: true,
+            arrowcloud_regular: false,
+            arrowcloud_events: true,
             golf: false,
             events_first: true,
         }
@@ -762,24 +770,40 @@ impl Default for SelectMusicScoreboxFilter {
 #[inline(always)]
 #[must_use]
 pub const fn select_music_scorebox_filter_has_any(filter: SelectMusicScoreboxFilter) -> bool {
-    filter.itg || filter.ex || filter.hard_ex || filter.tournaments || filter.golf
+    // Golf is the only ArrowCloud event board, so event boards alone count
+    // only while golf is enabled.
+    filter.groovestats_itg
+        || filter.groovestats_ex
+        || filter.groovestats_events
+        || filter.arrowcloud_regular
+        || (filter.arrowcloud_events && filter.golf)
 }
 
 #[inline(always)]
 #[must_use]
-pub const fn select_music_scorebox_filter_allows_kind(
-    kind: ScoreboxPaneKind,
+pub fn select_music_scorebox_filter_allows_pane(
+    pane: &LeaderboardPane,
     filter: SelectMusicScoreboxFilter,
 ) -> bool {
-    match kind {
-        ScoreboxPaneKind::Golf => filter.golf,
-        ScoreboxPaneKind::Gs => filter.itg,
-        ScoreboxPaneKind::Ex => filter.ex,
-        ScoreboxPaneKind::HardEx => filter.hard_ex,
-        ScoreboxPaneKind::Srpg | ScoreboxPaneKind::Itl | ScoreboxPaneKind::Other => {
-            filter.tournaments
+    if is_golf_pane(pane) {
+        filter.arrowcloud_events && filter.golf
+    } else if pane.is_arrowcloud() {
+        filter.arrowcloud_regular
+    } else if pane.is_groovestats() {
+        if pane.is_ex {
+            filter.groovestats_ex
+        } else {
+            filter.groovestats_itg
         }
+    } else {
+        filter.groovestats_events
     }
+}
+
+#[inline(always)]
+fn is_golf_pane(pane: &LeaderboardPane) -> bool {
+    pane.arrowcloud_kind == Some(ArrowCloudPaneKind::Golf)
+        || pane.name == GOLF_LEADERBOARD_PANE_NAME
 }
 
 #[must_use]
@@ -789,7 +813,7 @@ pub fn select_music_scorebox_filtered_panes(
 ) -> Vec<&LeaderboardPane> {
     let mut out = Vec::with_capacity(panes.len());
     for pane in panes {
-        if select_music_scorebox_filter_allows_kind(scorebox_pane_kind(pane), filter) {
+        if select_music_scorebox_filter_allows_pane(pane, filter) {
             out.push(pane);
         }
     }
@@ -814,7 +838,7 @@ pub fn select_music_scorebox_pane_refs(
     }
     let mut out = SmallVec::new();
     for pane in panes {
-        if select_music_scorebox_filter_allows_kind(scorebox_pane_kind(pane), filter) {
+        if select_music_scorebox_filter_allows_pane(pane, filter) {
             out.push(pane);
         }
     }
@@ -844,8 +868,7 @@ pub fn scorebox_pane_kind(pane: &LeaderboardPane) -> ScoreboxPaneKind {
 }
 
 fn known_scorebox_pane_kind(pane: &LeaderboardPane) -> Option<ScoreboxPaneKind> {
-    if pane.arrowcloud_kind == Some(ArrowCloudPaneKind::Golf) || pane.name == GOLF_LEADERBOARD_PANE_NAME
-    {
+    if is_golf_pane(pane) {
         return Some(ScoreboxPaneKind::Golf);
     }
     if pane.is_arrowcloud() {
@@ -1273,9 +1296,6 @@ impl PlayerLeaderboardCacheState {
     }
 }
 
-#[cfg(test)]
-#[path = "leaderboard_perf.rs"]
-mod performance_refresh;
 
 static RUNTIME_PLAYER_LEADERBOARD_CACHE: LazyLock<Mutex<PlayerLeaderboardCacheState>> =
     LazyLock::new(|| Mutex::new(PlayerLeaderboardCacheState::default()));
@@ -1597,7 +1617,10 @@ pub fn player_leaderboard_snapshot_from_entry(
 #[derive(Debug, Clone, Default)]
 pub struct GameplayScoreboxProfileSnapshot {
     pub display_scorebox: bool,
+    /// `GrooveStats` (or `BoogieStats`) can serve this side: enabled, joined, keyed.
     pub gs_active: bool,
+    /// `ArrowCloud` can serve this side: enabled, joined, keyed.
+    pub ac_active: bool,
     pub show_ex_score: bool,
     api_key: String,
     arrowcloud_api_key: String,
@@ -1613,6 +1636,7 @@ impl GameplayScoreboxProfileSnapshot {
     pub const fn new(
         display_scorebox: bool,
         gs_active: bool,
+        ac_active: bool,
         show_ex_score: bool,
         api_key: String,
         arrowcloud_api_key: String,
@@ -1625,6 +1649,7 @@ impl GameplayScoreboxProfileSnapshot {
         Self {
             display_scorebox,
             gs_active,
+            ac_active,
             show_ex_score,
             api_key,
             arrowcloud_api_key,
@@ -1634,6 +1659,13 @@ impl GameplayScoreboxProfileSnapshot {
             auto_profile_id,
             should_auto_populate,
         }
+    }
+
+    /// Whether any online leaderboard service can serve this side.
+    #[inline(always)]
+    #[must_use]
+    pub const fn online_active(&self) -> bool {
+        self.gs_active || self.ac_active
     }
 
     #[inline(always)]
@@ -1706,6 +1738,7 @@ pub fn scorebox_snapshot(
     GameplayScoreboxProfileSnapshot::new(
         display_scorebox,
         enable_groovestats && side_joined && !api_key.is_empty(),
+        include_arrowcloud && side_joined,
         show_ex_score,
         api_key,
         arrowcloud_api_key,
@@ -1723,7 +1756,7 @@ pub fn player_leaderboard_cache_key(
     profile_snapshot: &GameplayScoreboxProfileSnapshot,
 ) -> Option<PlayerLeaderboardCacheKey> {
     let chart_hash = chart_hash.trim();
-    if chart_hash.is_empty() || !profile_snapshot.gs_active {
+    if chart_hash.is_empty() || !profile_snapshot.online_active() {
         return None;
     }
 
@@ -1742,7 +1775,7 @@ pub fn player_leaderboard_cache_key_ref<'a>(
     profile_snapshot: &'a GameplayScoreboxProfileSnapshot,
 ) -> Option<PlayerLeaderboardCacheKeyRef<'a>> {
     let chart_hash = chart_hash.trim();
-    if chart_hash.is_empty() || !profile_snapshot.gs_active {
+    if chart_hash.is_empty() || !profile_snapshot.online_active() {
         return None;
     }
     Some(PlayerLeaderboardCacheKeyRef {
@@ -2081,29 +2114,48 @@ mod tests {
     }
 
     #[test]
-    fn select_music_scorebox_filter_allows_expected_kinds() {
-        let filter = SelectMusicScoreboxFilter {
-            itg: false,
-            ex: true,
-            hard_ex: false,
-            tournaments: true,
-            golf: false,
-            events_first: true,
+    fn select_music_scorebox_filter_chooses_boards_per_service() {
+        let gs_itg = pane("GrooveStats", false, None);
+        let gs_ex = pane("GrooveStats", true, None);
+        let itl = pane("ITL 2025", false, None);
+        let ac_itg = pane("ArrowCloud", false, Some(ArrowCloudPaneKind::Itg));
+        let ac_ex = pane("ArrowCloud", true, Some(ArrowCloudPaneKind::Ex));
+        let ac_hard_ex = pane("ArrowCloud", true, Some(ArrowCloudPaneKind::HardEx));
+        let golf = pane(GOLF_LEADERBOARD_PANE_NAME, false, Some(ArrowCloudPaneKind::Golf));
+        let allowed = |filter| {
+            [&gs_itg, &gs_ex, &itl, &ac_itg, &ac_ex, &ac_hard_ex, &golf]
+                .map(|pane| select_music_scorebox_filter_allows_pane(pane, filter))
         };
+        let none = SelectMusicScoreboxFilter {
+            groovestats_itg: false,
+            groovestats_ex: false,
+            groovestats_events: false,
+            arrowcloud_regular: false,
+            arrowcloud_events: false,
+            golf: true,
+            events_first: false,
+        };
+        assert!(!select_music_scorebox_filter_has_any(none));
+        assert_eq!(allowed(none), [false; 7]);
 
-        assert!(select_music_scorebox_filter_has_any(filter));
-        assert!(!select_music_scorebox_filter_allows_kind(
-            ScoreboxPaneKind::Gs,
-            filter
-        ));
-        assert!(select_music_scorebox_filter_allows_kind(
-            ScoreboxPaneKind::Ex,
-            filter
-        ));
-        assert!(select_music_scorebox_filter_allows_kind(
-            ScoreboxPaneKind::Itl,
-            filter
-        ));
+        // GrooveStats boards are chosen one by one, independently of
+        // ArrowCloud's boards of the same score type.
+        let gs_ex_only = SelectMusicScoreboxFilter { groovestats_ex: true, ..none };
+        assert_eq!(allowed(gs_ex_only), [false, true, false, false, false, false, false]);
+        let gs_events = SelectMusicScoreboxFilter { groovestats_events: true, ..none };
+        assert_eq!(allowed(gs_events), [false, false, true, false, false, false, false]);
+
+        // ArrowCloud's regular boards come and go together.
+        let ac_regular = SelectMusicScoreboxFilter { arrowcloud_regular: true, ..none };
+        assert!(select_music_scorebox_filter_has_any(ac_regular));
+        assert_eq!(allowed(ac_regular), [false, false, false, true, true, true, false]);
+
+        // The golf board needs ArrowCloud event boards and golf features.
+        let ac_events = SelectMusicScoreboxFilter { arrowcloud_events: true, ..none };
+        assert_eq!(allowed(ac_events), [false, false, false, false, false, false, true]);
+        let golf_off = SelectMusicScoreboxFilter { golf: false, ..ac_events };
+        assert!(!select_music_scorebox_filter_has_any(golf_off));
+        assert_eq!(allowed(golf_off), [false; 7]);
     }
 
     #[test]
@@ -2114,10 +2166,11 @@ mod tests {
             pane("ITL 2025", false, None),
         ];
         let filter = SelectMusicScoreboxFilter {
-            itg: false,
-            ex: true,
-            hard_ex: false,
-            tournaments: true,
+            groovestats_itg: false,
+            groovestats_ex: true,
+            groovestats_events: true,
+            arrowcloud_regular: false,
+            arrowcloud_events: false,
             golf: false,
             events_first: false,
         };
@@ -2642,9 +2695,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "leaderboard_request_perf.rs"]
-mod request_perf;
 
 #[cfg(test)]
 mod golf_tests {
@@ -2678,6 +2728,8 @@ mod golf_tests {
         assert!(select_music_scorebox_pane_refs(&panes, filter).is_empty());
         filter.golf = true;
         assert_eq!(select_music_scorebox_pane_refs(&panes, filter).len(), 1);
+        filter.arrowcloud_events = false;
+        assert!(select_music_scorebox_pane_refs(&panes, filter).is_empty());
         assert_eq!(scorebox_pane_kind(&panes[0]), ScoreboxPaneKind::Golf);
         assert!(!panes[0].is_hard_ex());
     }

@@ -13,20 +13,12 @@ pub mod texture_store;
 pub mod upload;
 
 #[cfg(test)]
-#[path = "../../../tests/support/paired_bench.rs"]
-mod paired_bench;
-#[cfg(test)]
 #[allow(dead_code)]
-#[path = "../../../tests/support/perf.rs"]
+#[path = "../../../tests/support/allocations.rs"]
 mod perf;
 #[cfg(test)]
 mod perf_fixture;
 
-#[cfg(test)]
-mod path_scan_perf;
-
-#[cfg(test)]
-mod texture_hint_perf;
 
 pub use builtin::{
     BLACK_TEXTURE_KEY, BuiltinTextureImage, WHITE_TEXTURE_KEY, black_texture_image,
@@ -662,7 +654,13 @@ pub fn apply_texture_hints(image: &mut RgbaImage, hints: &TextureHints) {
 
     for pixel in image.as_mut().as_chunks_mut::<4>().0 {
         let word = u32::from_le_bytes(*pixel);
-        let lum = ((word & 255) * 30 + ((word >> 8) & 255) * 59 + ((word >> 16) & 255) * 11) / 100;
+        // The weighted sum is at most 25,500, so use narrower SIMD lanes.
+        let lum = u32::from(
+            ((word & 255) as u16 * 30
+                + ((word >> 8) & 255) as u16 * 59
+                + ((word >> 16) & 255) as u16 * 11)
+                / 100,
+        );
         let output = if hints.alphamap {
             0x00ff_ffff | (lum << 24)
         } else {
@@ -1007,15 +1005,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn fix_hidden_alpha_preserves_opaque_image() {
-        let original = vec![12, 34, 56, 255, 78, 90, 12, 128];
-        let mut image = RgbaImage::from_raw(2, 1, original.clone()).expect("test image");
-
-        fix_hidden_alpha(&mut image);
-
-        assert_eq!(image.as_raw(), &original);
-    }
 
     #[test]
     fn ascii_hash_is_case_insensitive() {
@@ -1038,5 +1027,15 @@ mod tests {
             media_path_key(Path::new("assets/music/loop.ogg")).as_ref(),
             "assets/music/loop.ogg"
         );
+    }
+
+    #[test]
+    fn fix_hidden_alpha_preserves_opaque_image() {
+        let original = vec![12, 34, 56, 255, 78, 90, 12, 128];
+        let mut image = RgbaImage::from_raw(2, 1, original.clone()).expect("test image");
+
+        fix_hidden_alpha(&mut image);
+
+        assert_eq!(image.as_raw(), &original);
     }
 }

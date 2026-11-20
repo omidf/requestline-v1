@@ -41,6 +41,7 @@ pub enum Category {
     PadProfile,
     Styles,
     Playlists,
+    Requestline,
 }
 
 /// A visible entry in the select music menu wheel.
@@ -112,6 +113,8 @@ pub fn open() -> VisibleState {
 
 /// Named struct for the category item lists, replacing the 5-element tuple.
 pub struct CategoryItemLists {
+    /// `None` unless Requestline is on. Listed last, so it is one press up from the top.
+    pub requestline: Option<Vec<Item>>,
     pub standalone: Vec<Item>,
     pub sorts: Vec<Item>,
     pub profile: Option<Vec<Item>>,
@@ -132,6 +135,7 @@ pub fn build_entries(lists: CategoryItemLists, categories: &CategoryState) -> Ve
         (Category::PadProfile, "Pad Profile...", lists.pad_profile),
         (Category::Styles, "Styles...", lists.styles),
         (Category::Playlists, "Playlists...", lists.playlists),
+        (Category::Requestline, "Requestline...", lists.requestline),
     ];
     // The first available expanded category owns the entire wheel.
     for (category, label, items) in &mut groups {
@@ -604,11 +608,3 @@ mod tests {
         ));
     }
 }
-
-#[cfg(test)]
-#[path = "menu/borrowed_state_original.rs"]
-mod borrowed_state_original;
-
-#[cfg(test)]
-#[path = "menu/borrowed_state_perf.rs"]
-mod borrowed_state_perf;

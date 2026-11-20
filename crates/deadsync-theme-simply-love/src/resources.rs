@@ -164,8 +164,13 @@ pub const FONT_ASSETS: [FontAssetSpec; 27] = [
     },
 ];
 
+/// In The Golf course pattern, tiled behind the golf leaderboard pane.
+pub const GOLF_PANE_PATTERN_TEXTURE: &str = "golf/arrowpattern.png";
+pub const GOLF_PANE_PATTERN_TEXTURE_SIZE: [u32; 2] = [1000, 800];
+
 pub const BASE_TEXTURE_ASSETS: &[TextureAssetSpec] = &[
     texture_asset("logo.png"),
+    texture_asset(GOLF_PANE_PATTERN_TEXTURE),
     texture_asset("init_arrow.png"),
     texture_asset("dance.png"),
     texture_asset("pump.png"),
@@ -646,6 +651,12 @@ pub const ECS15_GAMEOVER_MUSIC: &str = "assets/music/ECS15-GameOver.ogg";
 
 /// Fixed UI cues prepared before the first screen accepts input.
 pub const SFX_PATHS: &[&str] = &[
+    // Requestline new-request sounds (deadsync_config::requestline::RequestlineSound).
+    "assets/sounds/requestline/coin.ogg",
+    "assets/sounds/requestline/chime.ogg",
+    "assets/sounds/requestline/dingdong.ogg",
+    "assets/sounds/requestline/pop.ogg",
+    "assets/sounds/requestline/selector.ogg",
     "assets/sounds/boom.ogg",
     "assets/sounds/change.ogg",
     "assets/sounds/change_value.ogg",
@@ -837,7 +848,8 @@ pub fn texture_needs_repeat_sampler(key: &str) -> bool {
             | "graphics/menu_bg_technique/arrow_tex.png#itg-model"
             | "graphics/menu_bg_technique/white_tex.png#itg-model"
             | "grades/goldstar (stretch).png"
-    ) || is_shared_background_texture(key)
+    ) || key == GOLF_PANE_PATTERN_TEXTURE
+        || is_shared_background_texture(key)
 }
 
 pub fn bundled_music_asset_paths() -> impl Iterator<Item = &'static str> {
@@ -1124,6 +1136,11 @@ mod tests {
         }
         assert!(bundled_music_asset_paths().any(|path| path == ECS15_GAMEOVER_MUSIC));
         assert!(SFX_PATHS.contains(&ECS15_EVAL_PASSED_SFX));
+        for sound in deadsync_config::requestline::RequestlineSound::ALL {
+            if let Some(path) = sound.asset_path() {
+                assert!(SFX_PATHS.contains(&path), "{path} is not prepared");
+            }
+        }
         assert!(SFX_PATHS.contains(&ECS15_EVAL_FAILED_SFX));
     }
 
@@ -1307,6 +1324,12 @@ mod tests {
             "grades/goldstar (stretch).png"
         ));
         assert!(texture_needs_repeat_sampler(ASSETS[0].shared_background));
+        assert!(texture_needs_repeat_sampler(GOLF_PANE_PATTERN_TEXTURE));
         assert!(!texture_needs_repeat_sampler("logo.png"));
+    }
+
+    #[test]
+    fn golf_pane_pattern_is_preloaded() {
+        assert!(initial_texture_assets().any(|asset| asset.key == GOLF_PANE_PATTERN_TEXTURE));
     }
 }

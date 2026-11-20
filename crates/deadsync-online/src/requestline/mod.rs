@@ -22,17 +22,21 @@ mod connection;
 mod library;
 mod protocol;
 
-use connection::{Command, Env, Handle, LocalLibrary, Target, TargetError, Timing, Uploader};
+use connection::{
+    Command, Env, Handle, LocalLibrary, QueueAction, Target, TargetError, Timing, Uploader,
+};
 use deadsync_config::requestline::RequestlineSide;
 use deadsync_net as network;
 use deadsync_profile::{PlayerSide, compat as profile};
 use log::warn;
 use serde::Deserialize;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 pub use library::song_id;
+pub use protocol::{QueueEntry, RequestedChart};
 
 const DEFAULT_BASE_URL: &str = "https://api.arrowcloud.dance";
 const BASE_URL_ENV: &str = "DEADSYNC_REQUESTLINE_URL";
@@ -62,6 +66,103 @@ pub enum Status {
 }
 
 static STATUS: LazyLock<Arc<Mutex<Status>>> = LazyLock::new(|| Arc::new(Mutex::new(Status::Off)));
+static QUEUE: LazyLock<Arc<QueueCell>> = LazyLock::new(|| Arc::new(QueueCell::default()));
+
+/// The page's queue as the server last sent it, first to play first.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct QueueSnapshot {
+    /// Changes whenever the queue does, including when it's forgotten.
+    pub generation: u64,
+    pub entries: Vec<QueueEntry>,
+}
+
+/// Where the connection thread leaves the queue for the game thread. The lock
+/// is only held to swap an `Arc`, so a reader never waits on the network.
+#[derive(Debug, Default)]
+pub(crate) struct QueueCell {
+    current: Mutex<Option<Arc<QueueSnapshot>>>,
+    generation: AtomicU64,
+    /// Requests that arrived since the game last asked, oldest first.
+    fresh: Mutex<Vec<QueueEntry>>,
+    has_fresh: AtomicBool,
+}
+
+/// More than this many unread new requests means nobody is reading; keep the
+/// newest.
+const FRESH_KEPT: usize = 64;
+
+impl QueueCell {
+    /// A queue from a `state` message. The same queue again (only the open
+    /// switch or the rules changed) keeps its generation.
+    fn publish(&self, entries: Vec<QueueEntry>) {
+        let Ok(mut current) = self.current.lock() else {
+            return;
+        };
+        if current.as_ref().is_some_and(|q| q.entries == entries) {
+            return;
+        }
+        let generation = self.generation.fetch_add(1, Ordering::AcqRel) + 1;
+        *current = Some(Arc::new(QueueSnapshot { generation, entries }));
+    }
+
+    /// Not linked: there is no queue to show, rather than a stale one.
+    fn clear(&self) {
+        let Ok(mut current) = self.current.lock() else {
+            return;
+        };
+        if current.take().is_some() {
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+
+    fn push_new(&self, fresh: Vec<QueueEntry>) {
+        let Ok(mut pending) = self.fresh.lock() else {
+            return;
+        };
+        pending.extend(fresh);
+        let over = pending.len().saturating_sub(FRESH_KEPT);
+        pending.drain(..over);
+        self.has_fresh.store(true, Ordering::Release);
+    }
+
+    fn take_new(&self) -> Vec<QueueEntry> {
+        if !self.has_fresh.swap(false, Ordering::AcqRel) {
+            return Vec::new();
+        }
+        self.fresh
+            .lock()
+            .map(|mut pending| std::mem::take(&mut *pending))
+            .unwrap_or_default()
+    }
+
+    fn snapshot(&self) -> Option<Arc<QueueSnapshot>> {
+        self.current.lock().ok().and_then(|q| q.clone())
+    }
+
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+}
+
+/// The queue while linked to the page; `None` when off or not connected.
+#[must_use]
+pub fn queue_snapshot() -> Option<Arc<QueueSnapshot>> {
+    QUEUE.snapshot()
+}
+
+/// Requests that arrived since the last call, oldest first. Never the queue
+/// already there when the game (re)connected. Cheap when there are none.
+#[must_use]
+pub fn take_new_requests() -> Vec<QueueEntry> {
+    QUEUE.take_new()
+}
+
+/// Cheap change check: compare with the last value seen before taking a
+/// snapshot.
+#[must_use]
+pub fn queue_generation() -> u64 {
+    QUEUE.generation()
+}
 static CONNECTION: Mutex<Option<Handle>> = Mutex::new(None);
 /// A key ArrowCloud refused. Not retried until the key or the settings change.
 static REJECTED_KEY: Mutex<Option<String>> = Mutex::new(None);
@@ -262,7 +363,12 @@ fn ensure_running() -> Option<std::sync::mpsc::Sender<Command>> {
         return None;
     }
     set_status(Status::Checking);
-    match connection::spawn(LiveEnv { cached: None }, STATUS.clone(), Timing::default()) {
+    match connection::spawn(
+        LiveEnv { cached: None },
+        STATUS.clone(),
+        QUEUE.clone(),
+        Timing::default(),
+    ) {
         Ok(handle) => {
             let tx = handle.tx.clone();
             *connection = Some(handle);
@@ -282,6 +388,8 @@ fn stop_connection(wait: Duration) {
         return;
     };
     handle.stop();
+    // The stopped thread no longer writes the queue; forget it here.
+    QUEUE.clear();
     let deadline = Instant::now() + wait;
     while !handle.join.is_finished() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(10));
@@ -309,6 +417,32 @@ pub fn on_settings_changed() {
     stop_connection(Duration::ZERO);
     // Sets Off / NoKey itself when there's nothing to connect with.
     let _ = ensure_running();
+}
+
+/// Send a queue change. Does nothing unless linked; the new queue arrives
+/// in the server's reply.
+fn send_queue_action(action: QueueAction) {
+    if !matches!(status(), Status::Linked { .. }) {
+        return;
+    }
+    let Some(tx) = CONNECTION
+        .lock()
+        .ok()
+        .and_then(|c| c.as_ref().map(|h| h.tx.clone()))
+    else {
+        return;
+    };
+    let _ = tx.send(Command::Queue(action));
+}
+
+/// The in-game requests switch: open or close the page's requests.
+pub fn set_requests_open(open: bool) {
+    send_queue_action(QueueAction::SetOpen(open));
+}
+
+/// Take a request off the queue without playing it.
+pub fn remove_request(id: String) {
+    send_queue_action(QueueAction::Remove { id });
 }
 
 /// A song started (not a restart): its first request leaves the queue.

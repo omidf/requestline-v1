@@ -1,10 +1,8 @@
 use deadlib_audio_core::{ActiveSfx, MixBus, MixControls, QueuedSfx, SfxPan, mix_active_sfx};
-use std::{hint::black_box, sync::Arc};
+use std::sync::Arc;
 
-#[path = "../../../tests/support/kernel_bench.rs"]
-mod bench;
 #[allow(dead_code)]
-#[path = "../../../tests/support/perf.rs"]
+#[path = "../../../tests/support/allocations.rs"]
 mod perf;
 
 fn voice(data: Arc<[i16]>, pan: SfxPan) -> ActiveSfx {
@@ -27,14 +25,24 @@ fn panning_matches_fused_reference_bits_and_voice_progress() {
         .collect();
     let controls = MixControls::new();
     for pan in [SfxPan::Left, SfxPan::Right, SfxPan::Center] {
-        let gains = [0.0, -0.0, 1.0, 0.375, f32::MIN_POSITIVE, f32::MAX]
-            .into_iter()
-            .chain((1..255).map(|exponent| f32::from_bits(exponent << 23)))
-            .chain((0..256).map(|fraction| f32::from_bits((127 << 23) | (fraction << 15))))
-            .chain([1, 15, 16, 254].into_iter().flat_map(|exponent| {
-                [1, 3, 127, 255].map(|fraction| f32::from_bits((exponent << 23) | (fraction << 15)))
-            }))
-            .chain([0x07ff_ffff, 0x0800_0001, 0x3ec0_0001].map(f32::from_bits));
+        let gains = [
+            0.0,
+            -0.0,
+            1.0,
+            0.375,
+            0.7,
+            0.9,
+            1.3,
+            f32::MIN_POSITIVE,
+            f32::MAX,
+        ]
+        .into_iter()
+        .chain((1..255).map(|exponent| f32::from_bits(exponent << 23)))
+        .chain((0..256).map(|fraction| f32::from_bits((127 << 23) | (fraction << 15))))
+        .chain([1, 15, 16, 254].into_iter().flat_map(|exponent| {
+            [1, 3, 127, 255].map(|fraction| f32::from_bits((exponent << 23) | (fraction << 15)))
+        }))
+        .chain([0x07ff_ffff, 0x0800_0001, 0x3ec0_0001].map(f32::from_bits));
         for gain in gains {
             controls.set_bus_gain(MixBus::new(0), gain);
             for initial in [
@@ -83,40 +91,6 @@ fn panning_matches_fused_reference_bits_and_voice_progress() {
                     expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
                     "{pan:?}, gain={gain}, initial={initial}"
                 );
-            }
-        }
-    }
-}
-
-#[test]
-#[ignore = "release CPU and allocation benchmark"]
-fn benchmark_panned_mix() {
-    let controls = MixControls::new();
-    for pan in [SfxPan::Left, SfxPan::Right, SfxPan::Center] {
-        for gain in [0.0, 1.0, 0.5, 0.125, 2.0, 0.375] {
-            controls.set_bus_gain(MixBus::new(0), gain);
-            for frames in [256usize, 4096] {
-                let data: Arc<[i16]> = (0..frames * 2 + 2)
-                    .map(|i| i.wrapping_mul(71) as i16)
-                    .collect();
-                let mut active = vec![voice(data, pan)];
-                let mut output = vec![0.0; frames * 2];
-                let label = format!("pan/{pan:?}/gain={gain}/frames={frames}");
-                let mut work = || {
-                    active[0].cursor = 0;
-                    output.fill(0.0);
-                    black_box(mix_active_sfx(
-                        black_box(&mut active),
-                        black_box(&mut output),
-                        0,
-                        2,
-                        black_box(&controls),
-                    ));
-                    black_box(&output);
-                };
-                let (_, counts) = perf::measure(&mut work);
-                println!("{label}: allocation {counts:?}");
-                bench::measure(&label, 2_000_000 / frames, &mut work);
             }
         }
     }

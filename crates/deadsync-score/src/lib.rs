@@ -12,6 +12,7 @@ use serde::Serialize;
 use smallvec::{SmallVec, smallvec};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
+use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
@@ -3381,13 +3382,14 @@ pub fn parse_gs_comment_counts(comment: &str) -> GsCommentCounts {
 
         let mut value: u32 = 0;
         let mut idx = 0usize;
-        for (i, ch) in s.char_indices() {
-            if let Some(d) = ch.to_digit(10) {
-                value = value.saturating_mul(10).saturating_add(d);
-                idx = i + ch.len_utf8();
-            } else {
+        for &byte in s.as_bytes() {
+            if !byte.is_ascii_digit() {
                 break;
             }
+            value = value
+                .saturating_mul(10)
+                .saturating_add(u32::from(byte - b'0'));
+            idx += 1;
         }
         if value == 0 {
             continue;
@@ -5267,6 +5269,20 @@ pub fn leaderboard_rank_for_score(entries: &[LeaderboardEntry], score_percent: f
     Some((higher_scores as u32).saturating_add(1))
 }
 
+/// Simply Love enables initials for a record with at least 1% dance points.
+/// ITGmania retains ten machine records and three personal records by default.
+#[must_use]
+pub fn name_entry_record_eligible(
+    score_percent: f64,
+    machine_rank: Option<u32>,
+    personal_rank: Option<u32>,
+) -> bool {
+    score_percent.is_finite()
+        && score_percent >= 0.01
+        && (machine_rank.is_some_and(|rank| (1..=10).contains(&rank))
+            || personal_rank.is_some_and(|rank| (1..=3).contains(&rank)))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScoreImportEndpoint {
     GrooveStats,
@@ -5640,16 +5656,15 @@ pub fn score_import_pack_detail(
     pack_misses: usize,
     pack_failures: usize,
 ) -> String {
-    format!(
-        "Pack {}/{}: {pack_name} -> {pack_hits} hit, {pack_misses} missing{}",
+    let mut detail = format!(
+        "Pack {}/{}: {pack_name} -> {pack_hits} hit, {pack_misses} missing",
         pack_idx + 1,
         total_packs,
-        if pack_failures > 0 {
-            format!(", {pack_failures} failed")
-        } else {
-            String::new()
-        },
-    )
+    );
+    if pack_failures > 0 {
+        write!(detail, ", {pack_failures} failed").expect("writing to a String cannot fail");
+    }
+    detail
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6114,16 +6129,16 @@ pub fn score_import_pack_complete_detail(
     pack_misses: usize,
     pack_failures: usize,
 ) -> String {
-    format!(
-        "Pack {}/{} complete: {pack_name} ({pack_chart_count} charts -> {pack_hits} hit, {pack_misses} missing{}).",
+    let mut detail = format!(
+        "Pack {}/{} complete: {pack_name} ({pack_chart_count} charts -> {pack_hits} hit, {pack_misses} missing",
         pack_idx + 1,
         total_packs,
-        if pack_failures > 0 {
-            format!(", {pack_failures} failed")
-        } else {
-            String::new()
-        },
-    )
+    );
+    if pack_failures > 0 {
+        write!(detail, ", {pack_failures} failed").expect("writing to a String cannot fail");
+    }
+    detail.push_str(").");
+    detail
 }
 
 #[must_use]
@@ -6197,8 +6212,8 @@ pub fn collect_chart_hashes_per_pack_for_import(
     let single_filter = nonempty_filters
         .next()
         .filter(|_| nonempty_filters.next().is_none());
-    let filter_set: HashSet<String> = if single_filter.is_some() {
-        HashSet::new()
+    let filter_set: HashSet<String, FxBuildHasher> = if single_filter.is_some() {
+        HashSet::default()
     } else {
         pack_groups_filter
             .iter()
@@ -6208,7 +6223,7 @@ pub fn collect_chart_hashes_per_pack_for_import(
     };
 
     let mut out: Vec<(String, Vec<String>)> = Vec::new();
-    let mut seen: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<&str, FxBuildHasher> = HashSet::default();
     let mut name_scratch = String::with_capacity(if filter_set.is_empty() { 0 } else { 64 });
     for pack in song_packs {
         let group_name = pack.group_name.trim();
@@ -6264,7 +6279,7 @@ pub fn collect_chart_hashes_per_pack_for_import(
 fn push_unique_import_chart_hash<'a>(
     raw_chart_hash: &'a str,
     existing_scores: &HashSet<String>,
-    seen: &mut HashSet<&'a str>,
+    seen: &mut HashSet<&'a str, FxBuildHasher>,
     hashes: &mut Vec<String>,
 ) {
     let chart_hash = raw_chart_hash.trim();
@@ -8047,71 +8062,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn score_cache_snapshots_remain_stable_after_later_mutations() {
-        let original = score_cache_snapshot_score(0);
-        let replacement = score_cache_snapshot_score(1);
-
-        let mut gs = GsScoreCacheState::default();
-        gs.insert_loaded_profile("profile", HashMap::from([("chart".to_string(), original)]));
-        let gs_first = gs
-            .set_profile_score("profile", "chart".to_string(), original)
-            .unwrap();
-        let gs_second = gs
-            .set_profile_score("profile", "chart".to_string(), replacement)
-            .unwrap();
-        assert!(!Arc::ptr_eq(&gs_first, &gs_second));
-        assert_eq!(gs_first["chart"], fix_gs_cached_score(original));
-        assert_eq!(gs_second["chart"], fix_gs_cached_score(replacement));
-
-        let mut ac = AcScoreCacheState::default();
-        ac.insert_loaded_profile(
-            "profile",
-            HashMap::from([("chart".to_string(), ArrowCloudScores::default())]),
-        );
-        let ac_first = ac
-            .set_profile_scores_bulk(
-                "profile",
-                [("chart".to_string(), ArrowCloudScores::default())],
-            )
-            .unwrap();
-        let replacement_ac = ArrowCloudScores {
-            itg: arrowcloud_score_from_submit_percent(
-                98.5,
-                false,
-                Utc.timestamp_opt(1, 0).unwrap(),
-            ),
-            ..ArrowCloudScores::default()
-        };
-        let ac_second = ac
-            .set_profile_scores_bulk("profile", [("chart".to_string(), replacement_ac)])
-            .unwrap();
-        assert!(!Arc::ptr_eq(&ac_first, &ac_second));
-        assert_eq!(ac_first["chart"], ArrowCloudScores::default());
-        assert_eq!(ac_second["chart"], replacement_ac);
-
-        let mut initial = LocalScoreIndex::default();
-        let first_header = score_cache_snapshot_header(0);
-        update_local_score_index(&mut initial, "chart", &first_header);
-        let mut local = LocalScoreCacheState::default();
-        local.insert_loaded_profile("profile", initial);
-        let local_first = local
-            .update_loaded_profile_index("profile", "chart", &first_header)
-            .unwrap();
-        let replacement_header = score_cache_snapshot_header(1_999);
-        let local_second = local
-            .update_loaded_profile_index("profile", "chart", &replacement_header)
-            .unwrap();
-        assert!(!Arc::ptr_eq(&local_first, &local_second));
-        assert_eq!(
-            local_first.best_itg["chart"],
-            cached_score_from_local_header(&first_header)
-        );
-        assert_eq!(
-            local_second.best_itg["chart"],
-            cached_score_from_local_header(&replacement_header)
-        );
-    }
 
     #[test]
     fn load_gs_score_index_or_scan_normalizes_existing_index() {
@@ -8698,6 +8648,18 @@ mod tests {
     }
 
     #[test]
+    fn name_entry_requires_one_percent_and_a_retained_record() {
+        for score in [0.0, -0.1, 0.0099, f64::NAN, f64::INFINITY] {
+            assert!(!name_entry_record_eligible(score, Some(1), Some(1)));
+        }
+        assert!(name_entry_record_eligible(0.01, Some(10), None));
+        assert!(name_entry_record_eligible(0.80, None, Some(3)));
+        assert!(!name_entry_record_eligible(0.80, Some(11), Some(4)));
+        assert!(!name_entry_record_eligible(0.80, None, None));
+        assert!(!name_entry_record_eligible(0.80, Some(0), Some(0)));
+    }
+
+    #[test]
     fn machine_leaderboard_entries_sort_and_limit_local_plays() {
         let entries = machine_leaderboard_entries(
             vec![
@@ -8728,12 +8690,11 @@ mod tests {
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].rank, 1);
-        assert_eq!(entries[0].name, "Cara");
-        assert_eq!(entries[0].machine_tag.as_deref(), Some("C"));
+        assert_eq!(entries[0].name, "Bob");
         assert_eq!(entries[0].score, 9900.0);
-        assert!(entries[0].is_fail);
+        assert!(!entries[0].is_fail);
         assert_eq!(entries[1].rank, 2);
-        assert_eq!(entries[1].name, "Bob");
+        assert_eq!(entries[1].name, "Alice");
     }
 
     #[test]
@@ -10097,20 +10058,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn arrowcloud_score_bincode_round_trip_preserves_date() {
-        let original = ArrowCloudScore {
-            score_percent: 0.9989,
-            server_grade: Some(ArrowCloudServerGrade::Tristar),
-            played_at: Some(Utc.timestamp_millis_opt(1_777_835_417_504).unwrap()),
-            play_id: Some(12345),
-            is_fail: false,
-        };
-        let cfg = bincode::config::standard();
-        let bytes = bincode::encode_to_vec(original, cfg).unwrap();
-        let (decoded, _): (ArrowCloudScore, _) = bincode::decode_from_slice(&bytes, cfg).unwrap();
-        assert_eq!(decoded, original);
-    }
 
     fn ac_score(percent_0_1: f64, is_fail: bool) -> ArrowCloudScore {
         ArrowCloudScore {
@@ -11482,6 +11429,8 @@ mod tests {
         let snapshot = GameplayScoreboxProfileSnapshot::default();
         assert!(!snapshot.display_scorebox);
         assert!(!snapshot.gs_active);
+        assert!(!snapshot.ac_active);
+        assert!(!snapshot.online_active());
         assert!(!snapshot.show_ex_score);
         assert!(snapshot.api_key().is_empty());
         assert!(snapshot.arrowcloud_api_key().is_empty());
@@ -11509,6 +11458,8 @@ mod tests {
 
         assert!(snapshot.display_scorebox);
         assert!(snapshot.gs_active);
+        assert!(snapshot.ac_active);
+        assert!(snapshot.online_active());
         assert!(snapshot.show_ex_score);
         assert_eq!(snapshot.api_key(), "gs-key");
         assert_eq!(snapshot.arrowcloud_api_key(), "ac-key");
@@ -11517,6 +11468,32 @@ mod tests {
         assert_eq!(snapshot.persistent_profile_id(), Some("profile-1"));
         assert_eq!(snapshot.auto_profile_id(), Some("profile-1"));
         assert!(snapshot.should_auto_populate());
+    }
+
+    #[test]
+    fn scorebox_snapshot_is_online_with_only_an_arrowcloud_key() {
+        let snapshot = scorebox_snapshot(
+            true,
+            false,
+            true,
+            true,
+            true,
+            false,
+            "  ",
+            "ac-key",
+            "",
+            Some("profile-1".to_string()),
+        );
+        assert!(!snapshot.gs_active);
+        assert!(snapshot.ac_active);
+        assert!(snapshot.online_active());
+        assert!(snapshot.include_arrowcloud());
+
+        let disabled = scorebox_snapshot(
+            true, false, true, true, false, false, "  ", "ac-key", "", None,
+        );
+        assert!(!disabled.ac_active);
+        assert!(!disabled.online_active());
     }
 
     #[test]
@@ -11534,6 +11511,8 @@ mod tests {
             Some("profile-1".to_string()),
         );
         assert!(!not_joined.gs_active);
+        assert!(!not_joined.ac_active);
+        assert!(!not_joined.online_active());
         assert!(not_joined.include_arrowcloud());
 
         let missing_keys = scorebox_snapshot(
@@ -11549,6 +11528,7 @@ mod tests {
             Some("profile-1".to_string()),
         );
         assert!(!missing_keys.gs_active);
+        assert!(!missing_keys.ac_active);
         assert!(!missing_keys.include_arrowcloud());
         assert_eq!(missing_keys.auto_profile_id(), Some("profile-1"));
         assert!(!missing_keys.should_auto_populate());
@@ -11579,9 +11559,9 @@ mod tests {
     }
 
     #[test]
-    fn player_leaderboard_cache_key_requires_chart_and_gs() {
+    fn player_leaderboard_cache_key_requires_chart_and_an_online_service() {
         let inactive = scorebox_snapshot(
-            true, false, true, true, true, false, " ", "ac-key", "player", None,
+            true, false, true, true, true, false, " ", " ", "player", None,
         );
         assert!(player_leaderboard_cache_key("deadbeef", &inactive).is_none());
 
@@ -11589,6 +11569,18 @@ mod tests {
             true, false, true, true, true, false, "gs-key", "ac-key", "player", None,
         );
         assert!(player_leaderboard_cache_key(" ", &active).is_none());
+    }
+
+    #[test]
+    fn player_leaderboard_cache_key_accepts_arrowcloud_only_profiles() {
+        let arrowcloud_only = scorebox_snapshot(
+            true, false, true, true, true, false, " ", "ac-key", "", None,
+        );
+        let key = player_leaderboard_cache_key("deadbeef", &arrowcloud_only)
+            .expect("ArrowCloud-only profile should fetch leaderboards");
+        assert!(key.api_key.is_empty());
+        assert_eq!(key.arrowcloud_api_key, "ac-key");
+        assert!(key.include_arrowcloud);
     }
 
     #[test]
@@ -11614,16 +11606,94 @@ mod tests {
         assert!(error.data.is_none());
         assert_eq!(error.error.as_deref(), Some("offline"));
     }
+
+    #[test]
+    fn arrowcloud_score_bincode_round_trip_preserves_date() {
+        let original = ArrowCloudScore {
+            score_percent: 0.9989,
+            server_grade: Some(ArrowCloudServerGrade::Tristar),
+            played_at: Some(Utc.timestamp_millis_opt(1_777_835_417_504).unwrap()),
+            play_id: Some(12345),
+            is_fail: false,
+        };
+        let cfg = bincode::config::standard();
+        let bytes = bincode::encode_to_vec(original, cfg).unwrap();
+        let (decoded, _): (ArrowCloudScore, _) = bincode::decode_from_slice(&bytes, cfg).unwrap();
+        assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn score_cache_snapshots_remain_stable_after_later_mutations() {
+        let original = score_cache_snapshot_score(0);
+        let replacement = score_cache_snapshot_score(1);
+
+        let mut gs = GsScoreCacheState::default();
+        gs.insert_loaded_profile("profile", HashMap::from([("chart".to_string(), original)]));
+        let gs_first = gs
+            .set_profile_score("profile", "chart".to_string(), original)
+            .unwrap();
+        let gs_second = gs
+            .set_profile_score("profile", "chart".to_string(), replacement)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&gs_first, &gs_second));
+        assert_eq!(gs_first["chart"], fix_gs_cached_score(original));
+        assert_eq!(gs_second["chart"], fix_gs_cached_score(replacement));
+
+        let mut ac = AcScoreCacheState::default();
+        ac.insert_loaded_profile(
+            "profile",
+            HashMap::from([("chart".to_string(), ArrowCloudScores::default())]),
+        );
+        let ac_first = ac
+            .set_profile_scores_bulk(
+                "profile",
+                [("chart".to_string(), ArrowCloudScores::default())],
+            )
+            .unwrap();
+        let replacement_ac = ArrowCloudScores {
+            itg: arrowcloud_score_from_submit_percent(
+                98.5,
+                false,
+                Utc.timestamp_opt(1, 0).unwrap(),
+            ),
+            ..ArrowCloudScores::default()
+        };
+        let ac_second = ac
+            .set_profile_scores_bulk("profile", [("chart".to_string(), replacement_ac)])
+            .unwrap();
+        assert!(!Arc::ptr_eq(&ac_first, &ac_second));
+        assert_eq!(ac_first["chart"], ArrowCloudScores::default());
+        assert_eq!(ac_second["chart"], replacement_ac);
+
+        let mut initial = LocalScoreIndex::default();
+        let first_header = score_cache_snapshot_header(0);
+        update_local_score_index(&mut initial, "chart", &first_header);
+        let mut local = LocalScoreCacheState::default();
+        local.insert_loaded_profile("profile", initial);
+        let local_first = local
+            .update_loaded_profile_index("profile", "chart", &first_header)
+            .unwrap();
+        let replacement_header = score_cache_snapshot_header(1_999);
+        let local_second = local
+            .update_loaded_profile_index("profile", "chart", &replacement_header)
+            .unwrap();
+        assert!(!Arc::ptr_eq(&local_first, &local_second));
+        assert_eq!(
+            local_first.best_itg["chart"],
+            cached_score_from_local_header(&first_header)
+        );
+        assert_eq!(
+            local_second.best_itg["chart"],
+            cached_score_from_local_header(&replacement_header)
+        );
+    }
 }
 
 #[cfg(test)]
-#[path = "../../../tests/support/perf.rs"]
+#[path = "../../../tests/support/allocations.rs"]
 #[allow(dead_code)]
 mod perf;
 
-#[cfg(test)]
-#[path = "../../../tests/support/paired_bench.rs"]
-mod paired_bench;
 
 #[cfg(test)]
 mod performance_state_flows;

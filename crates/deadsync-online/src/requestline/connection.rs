@@ -2,8 +2,8 @@
 //! song starts. Nothing here runs on the game loop; the game only sends
 //! [`Command`]s down a channel.
 
-use super::Status;
-use super::protocol::{Incoming, Outgoing, PROTOCOL};
+use super::protocol::{Incoming, Outgoing, PROTOCOL, QueueEntry};
+use super::{QueueCell, Status};
 use log::{debug, info, warn};
 use std::io::ErrorKind;
 use std::net::TcpStream;
@@ -28,7 +28,27 @@ pub(super) enum Command {
         song_id: String,
         at: Instant,
     },
+    /// The streamer runs the queue from the game: open or close requests,
+    /// skip or cancel one. Sent only while connected; never held for later,
+    /// so a press made offline can't fire minutes afterwards.
+    Queue(QueueAction),
     Shutdown,
+}
+
+/// What the streamer can do to the queue from the game.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum QueueAction {
+    SetOpen(bool),
+    Remove { id: String },
+}
+
+impl QueueAction {
+    fn message(self) -> Outgoing {
+        match self {
+            Self::SetOpen(open) => Outgoing::SetOpen { open },
+            Self::Remove { id } => Outgoing::Remove { id },
+        }
+    }
 }
 
 /// Where to connect: the ticket call's answer, turned into a URL.
@@ -99,6 +119,7 @@ impl Default for Timing {
 #[derive(Clone)]
 pub(super) struct Shared {
     pub status: Arc<Mutex<Status>>,
+    pub queue: Arc<QueueCell>,
     pub alive: Arc<AtomicBool>,
 }
 
@@ -111,8 +132,24 @@ impl Shared {
         if !self.alive() {
             return;
         }
+        // A queue is only true while linked; anything else forgets it.
+        if !matches!(status, Status::Linked { .. }) {
+            self.queue.clear();
+        }
         if let Ok(mut current) = self.status.lock() {
             *current = status;
+        }
+    }
+
+    fn push_new_requests(&self, fresh: Vec<QueueEntry>) {
+        if self.alive() {
+            self.queue.push_new(fresh);
+        }
+    }
+
+    fn set_queue(&self, entries: Vec<QueueEntry>) {
+        if self.alive() {
+            self.queue.publish(entries);
         }
     }
 
@@ -149,12 +186,14 @@ impl Handle {
 pub(super) fn spawn<E: Env>(
     env: E,
     status: Arc<Mutex<Status>>,
+    queue: Arc<QueueCell>,
     timing: Timing,
 ) -> std::io::Result<Handle> {
     let (tx, rx) = mpsc::channel();
     let alive = Arc::new(AtomicBool::new(true));
     let shared = Shared {
         status,
+        queue,
         alive: alive.clone(),
     };
     let join = thread::Builder::new()
@@ -296,6 +335,9 @@ fn keep_offline(command: Command, session: &mut Session) {
         Command::Ended { song_id, at } => {
             session.pending_end = Some(PendingEnd { song_id, at });
         }
+        Command::Queue(action) => {
+            debug!("requestline: not connected, dropped {action:?}");
+        }
         Command::SyncLibrary | Command::Shutdown => {}
     }
 }
@@ -329,6 +371,9 @@ struct Live<'a, E: Env> {
     said_hello: bool,
     server_hash: Option<String>,
     sync: SyncState,
+    /// Request ids in the last queue this socket heard; `None` until the first
+    /// state, which only sets the baseline so a (re)connect alerts nothing.
+    seen_ids: Option<std::collections::HashSet<String>>,
 }
 
 fn connect(url: &str, read_wait: Duration) -> Result<Socket, SessionEnd> {
@@ -391,6 +436,7 @@ fn run_socket<E: Env>(
         session,
         page: target.page_name.clone().unwrap_or_default(),
         said_hello: false,
+        seen_ids: None,
         server_hash: None,
         sync: SyncState::Idle,
     };
@@ -531,13 +577,19 @@ impl<E: Env> Live<'_, E> {
                     });
                 }
             }
-            Incoming::State { open, closed_by } => {
+            Incoming::State {
+                open,
+                closed_by,
+                queue,
+            } => {
                 debug!(
                     "requestline: requests {} (closed by {})",
                     if open { "open" } else { "closed" },
                     closed_by.as_deref().unwrap_or("nobody")
                 );
                 self.shared.set_open(open);
+                self.note_new_requests(&queue);
+                self.shared.set_queue(queue);
             }
             Incoming::Pong | Incoming::Unknown => {}
             Incoming::LibraryUpload {
@@ -621,9 +673,32 @@ impl<E: Env> Live<'_, E> {
                     self.deliver_pending_end()?;
                 }
             }
+            Command::Queue(action) => {
+                if self.said_hello {
+                    info!("requestline: {action:?}");
+                    self.send(&action.message())?;
+                } else {
+                    debug!("requestline: not linked yet, dropped {action:?}");
+                }
+            }
             Command::Shutdown => {}
         }
         Ok(())
+    }
+
+    /// Requests that weren't in the previous queue are new; tell the game.
+    fn note_new_requests(&mut self, queue: &[QueueEntry]) {
+        if let Some(seen) = &self.seen_ids {
+            let fresh: Vec<QueueEntry> = queue
+                .iter()
+                .filter(|entry| !seen.contains(&entry.id))
+                .cloned()
+                .collect();
+            if !fresh.is_empty() {
+                self.shared.push_new_requests(fresh);
+            }
+        }
+        self.seen_ids = Some(queue.iter().map(|entry| entry.id.clone()).collect());
     }
 
     fn deliver_pending_start(&mut self) -> Result<(), ()> {
@@ -927,10 +1002,167 @@ mod tests {
     type Started = (Handle, Arc<Mutex<Status>>, Receiver<(String, Vec<u8>)>);
 
     fn start(url: String, library: Option<(Vec<u8>, String)>) -> Started {
+        start_with_queue(url, library).0
+    }
+
+    fn start_with_queue(
+        url: String,
+        library: Option<(Vec<u8>, String)>,
+    ) -> (Started, Arc<QueueCell>) {
         let (puts, put_rx) = mpsc::channel();
         let status = Arc::new(Mutex::new(Status::Off));
-        let handle = spawn(TestEnv { url, library, puts }, status.clone(), fast()).unwrap();
-        (handle, status, put_rx)
+        let queue = Arc::new(QueueCell::default());
+        let handle = spawn(
+            TestEnv { url, library, puts },
+            status.clone(),
+            queue.clone(),
+            fast(),
+        )
+        .unwrap();
+        ((handle, status, put_rx), queue)
+    }
+
+    fn wait_for_queue(queue: &QueueCell, want: &[&str]) -> u64 {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let ids: Option<Vec<String>> = queue
+                .snapshot()
+                .map(|q| q.entries.iter().map(|e| e.id.clone()).collect());
+            if ids.as_deref().is_some_and(|ids| ids == want) {
+                return queue.generation();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "queue stayed {ids:?}, wanted {want:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn only_requests_that_arrive_while_connected_are_new() {
+        let (server, url) = Server::new();
+        let ((handle, _status, _puts), queue) = start_with_queue(url, None);
+        let state = |ids: &[&str]| {
+            let entries: Vec<String> = ids
+                .iter()
+                .map(|id| format!(r#"{{"id":"{id}","songId":"p/{id}","title":"{id}","name":"n"}}"#))
+                .collect();
+            format!(r#"{{"type":"state","open":true,"queue":[{}]}}"#, entries.join(","))
+        };
+
+        let mut socket = server.accept();
+        recv_json(&mut socket);
+        send(&mut socket, HELLO_NULL);
+        // What was already queued when the game connected is not news.
+        send(&mut socket, &state(&["r1"]));
+        wait_for_queue(&queue, &["r1"]);
+        assert!(queue.take_new().is_empty());
+
+        // Two arrive, then one leaves: only the two arrivals, once each.
+        send(&mut socket, &state(&["r1", "r2", "r3"]));
+        wait_for_queue(&queue, &["r1", "r2", "r3"]);
+        send(&mut socket, &state(&["r2", "r3"]));
+        wait_for_queue(&queue, &["r2", "r3"]);
+        let ids = |v: Vec<QueueEntry>| v.into_iter().map(|e| e.id).collect::<Vec<_>>();
+        assert_eq!(ids(queue.take_new()), ["r2", "r3"]);
+        assert!(queue.take_new().is_empty(), "taken once");
+
+        // Reconnect: the first state is a new baseline, even with r4 in it.
+        drop(socket);
+        let mut again = server.accept();
+        recv_json(&mut again);
+        send(&mut again, HELLO_NULL);
+        send(&mut again, &state(&["r2", "r3", "r4"]));
+        wait_for_queue(&queue, &["r2", "r3", "r4"]);
+        assert!(queue.take_new().is_empty());
+        send(&mut again, &state(&["r2", "r3", "r4", "r5"]));
+        wait_for_queue(&queue, &["r2", "r3", "r4", "r5"]);
+        assert_eq!(ids(queue.take_new()), ["r5"]);
+        handle.stop();
+    }
+
+    #[test]
+    fn queue_actions_are_sent_once_linked() {
+        let (server, url) = Server::new();
+        let (handle, status, _puts) = start(url, None);
+        let mut socket = server.accept();
+        recv_json(&mut socket);
+        send(&mut socket, HELLO_NULL);
+        send(&mut socket, STATE_OPEN);
+        wait_for(
+            &status,
+            &Status::Linked {
+                page: "Wafles".into(),
+                requests_open: true,
+            },
+        );
+        handle.tx.send(Command::Queue(QueueAction::SetOpen(false))).unwrap();
+        handle
+            .tx
+            .send(Command::Queue(QueueAction::Remove { id: "r1".into() }))
+            .unwrap();
+        let mut sent = Vec::new();
+        while sent.len() < 2 {
+            let message = recv_json(&mut socket);
+            if ["set-open", "remove"].contains(&message["type"].as_str().unwrap_or("")) {
+                sent.push(message);
+            }
+        }
+        assert_eq!(
+            sent,
+            [
+                serde_json::json!({"type":"set-open","open":false}),
+                serde_json::json!({"type":"remove","id":"r1"}),
+            ]
+        );
+        handle.stop();
+    }
+
+    #[test]
+    fn queue_follows_state_and_is_forgotten_on_disconnect() {
+        let (server, url) = Server::new();
+        let ((handle, status, _puts), queue) = start_with_queue(url, None);
+        assert!(queue.snapshot().is_none());
+
+        let mut socket = server.accept();
+        recv_json(&mut socket);
+        send(&mut socket, HELLO_NULL);
+        send(
+            &mut socket,
+            r#"{"type":"state","open":true,"queue":[{"id":"r1","songId":"p/a","title":"A","name":"x"},{"id":"r2","songId":"p/b","title":"B","name":"y","chart":{"hash":"ab","difficulty":"challenge","meter":12}}]}"#,
+        );
+        let first = wait_for_queue(&queue, &["r1", "r2"]);
+        let snap = queue.snapshot().unwrap();
+        assert_eq!(snap.generation, first);
+        assert_eq!(snap.entries[1].chart.as_ref().unwrap().meter, Some(12));
+
+        // Same queue, requests closed: the queue's generation stays put.
+        send(
+            &mut socket,
+            r#"{"type":"state","open":false,"queue":[{"id":"r1","songId":"p/a","title":"A","name":"x"},{"id":"r2","songId":"p/b","title":"B","name":"y","chart":{"hash":"ab","difficulty":"challenge","meter":12}}]}"#,
+        );
+        wait_for(
+            &status,
+            &Status::Linked {
+                page: "Wafles".into(),
+                requests_open: false,
+            },
+        );
+        assert_eq!(queue.generation(), first);
+
+        // r1 played: a new generation with only r2.
+        send(
+            &mut socket,
+            r#"{"type":"state","open":false,"queue":[{"id":"r2","songId":"p/b","title":"B","name":"y"}]}"#,
+        );
+        assert!(wait_for_queue(&queue, &["r2"]) > first);
+
+        // The server goes away: no queue rather than a stale one.
+        drop(socket);
+        wait_for(&status, &Status::Unreachable);
+        assert!(queue.snapshot().is_none());
+        handle.stop();
     }
 
     const HELLO_NULL: &str = r#"{"type":"hello","protocol":1,"role":"game","userId":"u","pageName":"Wafles","isOwner":true,"libraryHash":null}"#;

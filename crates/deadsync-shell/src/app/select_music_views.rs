@@ -10,7 +10,7 @@ use deadsync_theme_simply_love::views::{
     SelectMusicDownloadView, SelectMusicLeaderboardRequest, SelectMusicLeaderboardSideView,
     SelectMusicLeaderboardView, SelectMusicPadProfileView, SelectMusicPolicyView,
     SelectMusicProfileView, SelectMusicRuntimeView, SelectMusicScoreboxRequest,
-    SelectMusicSessionView, SelectMusicSettingsView,
+    SelectMusicRequestlineView, SelectMusicSessionView, SelectMusicSettingsView,
 };
 use std::{sync::Arc, time::Instant};
 
@@ -353,10 +353,13 @@ impl App {
         })
     }
 
-    pub(super) fn sync_select_music_runtime_view(&mut self, policy: SelectMusicFramePolicy) {
+    pub(super) fn sync_select_music_runtime_view(&mut self, mut policy: SelectMusicFramePolicy) {
         if self.state.screens.current_screen != CurrentScreen::SelectMusic {
             return;
         }
+        // Device hotplug can enable the shared pad editor without changing the
+        // cached configuration policy or requiring the FSR option.
+        policy.view.fsr_profiles |= deadsync_reflex::connected();
         let now = Instant::now();
         let lobby = self.select_music_lobby.refresh_if_dirty(now);
         let downloads_visible =
@@ -386,6 +389,33 @@ impl App {
         } else {
             self.select_music_downloads_visible = false;
             None
+        };
+        let requestline = {
+            let config = config::runtime::get();
+            let enabled = config.enable_arrowcloud && config.requestline.enabled;
+            let status = deadsync_online::requestline::status();
+            let generation = deadsync_online::requestline::queue_generation();
+            let side = config.requestline.side;
+            // The chip borrows the popup's icon; a note while the popup is off.
+            let icon = config.requestline.visual.emoji().unwrap_or("\u{1F3B5}");
+            select_music::requestline_view_stale(
+                &self.state.screens.select_music_state,
+                enabled,
+                &status,
+                generation,
+                side,
+                icon,
+            )
+            .then(|| SelectMusicRequestlineView {
+                enabled,
+                status,
+                generation,
+                // The snapshot may be newer than `generation`; the next frame
+                // sees the counter moved and sends it again.
+                queue: deadsync_online::requestline::queue_snapshot(),
+                side,
+                icon,
+            })
         };
         let shop_visible =
             select_music::srpg_shop_overlay_visible(&self.state.screens.select_music_state);
@@ -542,7 +572,7 @@ impl App {
                             } else {
                                 Vec::new()
                             };
-                            let leaderboards = if player.leaderboard.gs_active {
+                            let leaderboards = if player.leaderboard.online_active() {
                                 chart_hash.and_then(|hash| {
                                     scores::get_or_fetch_player_leaderboards_for_profile(
                                         hash,
@@ -627,6 +657,7 @@ impl App {
                 lobby,
                 downloads,
                 srpg_shop,
+                requestline,
                 settings,
                 music_wheel,
                 scoreboxes,
@@ -727,10 +758,10 @@ mod tests {
             enable_arrowcloud: false,
             auto_populate_gs_scores: true,
             auto_download_unlocks: true,
-            select_music_scorebox_cycle_itg: false,
-            select_music_scorebox_cycle_ex: true,
-            select_music_scorebox_cycle_hard_ex: false,
-            select_music_scorebox_cycle_tournaments: true,
+            groovestats_scorebox_itg: false,
+            groovestats_scorebox_ex: true,
+            arrowcloud_regular_boards: Some(false),
+            groovestats_scorebox_events: true,
             ..Default::default()
         };
 
@@ -745,9 +776,9 @@ mod tests {
         assert!(!policy.enable_arrowcloud);
         assert!(policy.auto_populate_gs_scores);
         assert!(policy.auto_download_unlocks);
-        assert!(!policy.pane_filter.itg);
-        assert!(policy.pane_filter.ex);
-        assert!(!policy.pane_filter.hard_ex);
-        assert!(policy.pane_filter.tournaments);
+        assert!(!policy.pane_filter.groovestats_itg);
+        assert!(policy.pane_filter.groovestats_ex);
+        assert!(!policy.pane_filter.arrowcloud_regular);
+        assert!(policy.pane_filter.groovestats_events);
     }
 }

@@ -4336,6 +4336,24 @@ pub fn test_input_pane_active(state: &State) -> bool {
         .any(|&pane| matches!(pane, EvalPane::TestInput))
 }
 
+/// Refresh Snek's binary sensor indicators for the Evaluation Test Input pane.
+/// The shell owns HID polling and calls this only while that pane is active.
+pub fn set_snek_sensor_state(
+    state: &mut State,
+    connected: bool,
+    read_error: bool,
+    sensors: [[[bool; 4]; 4]; 2],
+    revision: u64,
+) {
+    test_input::set_snek_sensor_state(
+        &mut state.test_input_state,
+        connected,
+        read_error,
+        sensors,
+        revision,
+    );
+}
+
 #[inline(always)]
 const fn eval_player_color_rgba(
     side: profile_data::PlayerSide,
@@ -6128,7 +6146,7 @@ pub fn push_actors(
                         .unwrap_or_else(|| cached_str_ref(simple))
                 };
 
-                {
+                if !breakdown_text.trim().is_empty() {
                     let x = breakdown_x;
                     let y = if policy.zmod_rating_box_text {
                         cy - 97.0

@@ -1,5 +1,6 @@
 pub mod lobby_overlay;
 pub mod music_wheel;
+pub mod request_chip;
 pub mod screen_bars;
 pub mod select_music_menu;
 pub mod select_pane;
